@@ -3,6 +3,9 @@ import net from "node:net";
 
 const socketPath = process.env.CLAUDE_MICRO_SOCKET ?? "/private/tmp/claude-micro.sock";
 const auditPath = process.env.CLAUDE_MICRO_HOOK_AUDIT;
+// The hooks and the tmux bridge install independently. A bridge that is not
+// running is a normal state, not an error worth surfacing on every hook.
+if (!fs.existsSync(socketPath)) process.exit(0);
 let body = "";
 for await (const chunk of process.stdin) body += chunk;
 if (!body.trim()) process.exit(0);

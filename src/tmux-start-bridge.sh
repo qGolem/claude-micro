@@ -23,11 +23,12 @@ if [[ -f "$pid_file" ]]; then
   fi
 fi
 
-node_bin="${CLAUDE_MICRO_NODE:-}"
-if [[ -z "$node_bin" && -r "$root/.claude-micro-node" ]]; then
-  node_bin="$(<"$root/.claude-micro-node")"
+if [[ ! -d "$root/node_modules/node-hid" ]]; then
+  print -u2 "claude-micro: dependencies missing; run 'npm install' in $root"
+  exit 1
 fi
-node_bin="${node_bin:-$(command -v node)}"
+
+node_bin="${CLAUDE_MICRO_NODE:-$(command -v node)}"
 [[ -n "$node_bin" ]] || { print -u2 "claude-micro: Node.js was not found"; exit 1; }
 rm -f "$pid_file" "$socket" "$health_file"
 nohup "$node_bin" "$root/src/daemon.mjs" >>"$log_file" 2>&1 &

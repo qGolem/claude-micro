@@ -39,5 +39,5 @@ try {
   // It is safe for removal to continue when tmux/the bridge is not running.
 }
 
-console.log("Removed Claude Micro tmux config block and Claude Code hooks.");
-console.log("Restart tmux to clear the currently loaded binding, then remove the plugin directory if desired.");
+console.log("Removed the 0.1.x Claude Micro tmux config block and settings.json hooks.");
+console.log("The old copied runtime under ~/.config/tmux/plugins/claude-micro can be deleted once TPM manages the plugin.");

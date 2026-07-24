@@ -1,0 +1,14 @@
+{
+  "name": "claude-micro",
+  "version": "0.2.0",
+  "description": "Forwards Claude Code lifecycle events to the Claude Micro tmux bridge for Codex Micro agent-key lighting.",
+  "author": {
+    "name": "qGolem"
+  },
+  "keywords": [
+    "tmux",
+    "codex-micro",
+    "work-louder",
+    "macos"
+  ]
+}

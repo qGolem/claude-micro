@@ -1,155 +1,142 @@
-# Claude Micro tmux plugin
+# Claude Micro
 
 macOS integration for the Work Louder / OpenAI Codex Micro, Claude Code, and
-tmux. It gives six Claude sessions live Agent-key lighting, focuses the matching
-tmux pane from a frosted key, and maps the Micro controls to the active pane.
+tmux: six Claude sessions get live Agent-key lighting, a frosted key focuses
+the matching tmux pane, and the Micro controls drive the active pane.
 
-The HID bridge is written in Node.js; the tmux interface is a conventional
-tmux plugin entrypoint with options, a status format, health reporting, and
-safe install/update/uninstall commands.
+Two thin plugins share this repository:
+
+- a **tmux plugin** (TPM) that runs the HID bridge daemon
+- a **Claude Code plugin** whose hooks forward session events to the bridge
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph sessions["Claude Code sessions (tmux panes)"]
+        hooks["claude-micro plugin hooks<br/>node event.mjs"]
+    end
+    subgraph tpm["tmux plugin (TPM)"]
+        daemon["bridge daemon<br/>slots · lighting · input"]
+        status["tmux status badge"]
+    end
+    micro["Codex Micro<br/>agent keys · dial · joystick"]
+    focus["tmux + iTerm<br/>pane focus · send-keys"]
+
+    hooks -- "lifecycle events<br/>(unix socket)" --> daemon
+    daemon --> focus
+    daemon <-- "HID RPC:<br/>LED states out · input in" --> micro
+    daemon -. "health file" .-> status
+```
+
+Each Claude Code session claims one of six agent keys; its hooks report every
+lifecycle event to the bridge, which lights the key. Pressing a frosted key
+flows the other way: the bridge finds the session's pane and focuses it
+through tmux and iTerm.
 
 ## Requirements
 
-- macOS, Node.js 20+, tmux, Claude Code, and iTerm2
-- Wired Codex Micro
-- **Input Monitoring** for iTerm:
-  **System Settings → Privacy & Security → Input Monitoring**
+- macOS, Node.js 20+, tmux with [TPM](https://github.com/tmux-plugins/tpm), Claude Code, iTerm2
+- Wired Codex Micro, with **Input Monitoring** granted to iTerm
+  (System Settings → Privacy & Security → Input Monitoring)
 
-The pane-focus feature uses iTerm's AppleScript API to find the correct tmux
-client across windows. Grant its macOS Automation prompt if one appears. Other
-terminals can still use the lighting and active-pane controls, but do not get
+Pane focus uses iTerm's AppleScript API; grant the macOS Automation prompt if
+one appears. Other terminals keep lighting and active-pane controls but not
 cross-window Agent-key focus.
 
 ## Install
 
-```sh
-git clone <repository-url> claude-micro
-cd claude-micro
-npm install
-npm run install-plugin
-tmux source-file ~/.config/tmux/tmux.conf
+tmux plugin — add to your tmux config, then press **Prefix + I**:
+
+```tmux
+set -g @plugin 'qGolem/claude-micro'
 ```
 
-The installer copies a self-contained runtime to
-`~/.config/tmux/plugins/claude-micro`, installs Claude Code hooks, and manages
-only its marked block in `~/.config/tmux/tmux.conf`. It creates one backup of
-that config and of pre-existing Claude settings.
+The bridge needs its native HID dependency once per install/update:
 
-Re-run `npm run install-plugin` to update an existing installation. It is
-idempotent: unrelated tmux configuration and status settings are preserved.
+```sh
+npm install --prefix ~/.tmux/plugins/claude-micro
+```
+
+Claude Code hooks — inside Claude Code:
+
+```
+/plugin marketplace add qGolem/claude-micro
+/plugin install claude-micro@claude-micro
+```
+
+(For a local checkout, `/plugin marketplace add /path/to/claude-micro` works too.)
+
+Verify everything with `npm run doctor --prefix ~/.tmux/plugins/claude-micro`.
+
+### Upgrading from the 0.1.x installer
+
+The old `npm run install-plugin` flow is gone. Remove its tmux config block and
+settings.json hooks once, then install as above:
+
+```sh
+cd ~/.config/tmux/plugins/claude-micro && npm run cleanup-legacy
+```
 
 ## Status module
 
 The plugin publishes a tmux command named `#{@claude_micro_status_command}`.
-Wrap it in tmux's `#(...)` syntax wherever your theme places status modules;
-it does not replace `status-left` or change your theme refresh interval.
-
-For a plain tmux status line, add this after the plugin entrypoint:
+Wrap it in `#(...)` wherever your theme places status modules:
 
 ```tmux
 set -ag status-left ' #(#{@claude_micro_status_command})'
 ```
 
-If a theme rebuilds `status-left` and you prefer automatic placement, opt in:
-
-```tmux
-set -g @claude_micro_auto_status 'on'
-```
-
-It appends the module once after your theme has loaded; it never replaces the
-existing value.
-
-Place it after your Pomodoro module to keep the Micro badge beside it. The
-badge is green when connected; amber/red shows `↻ k` when reconnecting/stopped.
-Press **Prefix + k** to reset only the bridge.
+The badge is green when connected; amber/red shows `↻ k` when
+reconnecting/stopped — press **Prefix + k** to reset the bridge.
 
 ## Configuration
 
-Set options before the plugin entrypoint in your tmux config.
+Set options before the plugin line:
 
 ```tmux
-# Default: k. Any unused tmux key is accepted.
-set -g @claude_micro_reset_key 'k'
-
-# Default: on. Set off if you do not use the Meta-1 through Meta-6 focus keys.
-set -g @claude_micro_slot_bindings 'on'
-
-# Default: off. Append the status module once without replacing status-left.
-set -g @claude_micro_auto_status 'off'
-
-# Optional: absolute Node executable for tmux servers with a restricted PATH.
-set -g @claude_micro_node '/absolute/path/to/node'
+set -g @claude_micro_reset_key 'k'       # bridge reset binding
+set -g @claude_micro_slot_bindings 'on'  # Meta-1..Meta-6 focus keys
+set -g @claude_micro_auto_status 'off'   # 'on' appends the status module once
+set -g @claude_micro_node '/path/node'   # only for restricted-PATH tmux servers
 ```
-
-The installer records its current Node path automatically. Override it only if
-you intentionally use a different Node installation.
 
 ## Controls
 
-| Physical control | Action in active tmux pane |
-| --- | --- |
-| Frosted Agent keys 1–6 | tap to focus their assigned Claude pane; hold 3 seconds to clear its assignment |
-| Third-row left | Ctrl+S |
-| Third-row middle-left | Ctrl+W |
-| Third-row middle-right | `daw` (Vim motion) |
-| Third-row right | Return |
-| Dial press | Escape |
-| Dial turn left / right | Left / Right arrow |
-| Bottom Whisperflow key | right Command (for Whisperflow) |
-| Bottom-right | Ctrl+C |
-| Joystick flick | corresponding arrow key |
+![Codex Micro layout: dial, joystick, six frosted agent keys, four command keys (Ctrl+S, Ctrl+W, daw, Return), double-wide push-to-talk key (right Command), and Ctrl+C key](docs/codex-micro.svg)
 
 ## Agent key states
 
 | Claude Code event | Frosted Agent-key state |
 | --- | --- |
 | Session start/end | dim white |
-| Prompt submission or regular tool activity | pulsing blue |
-| `AskUserQuestion`, permission request, or notification | pulsing amber |
+| Prompt submission or tool activity | pulsing blue |
+| `AskUserQuestion`, permission request, notification | pulsing amber |
 | Stop/completion | solid green |
 | Notification containing `error` or `failed` | pulsing red |
 
-Claude Code sends an ordinary **“Claude is waiting for your input”** notification
-about a minute after a completed session is left idle. That is why a finished
-key can become amber.
+An idle finished session turns amber after about a minute — that is Claude
+Code's ordinary "waiting for your input" notification.
 
-## Diagnostics and recovery
+## Diagnostics
 
-```sh
-npm run doctor
-```
-
-`doctor` checks Node, tmux, the vendor HID interface, installed Claude hooks,
-the bridge health record, and socket reachability.
-
-- If the badge shows `↻ k`, press **Prefix + k**.
-- Disconnect/reconnect the Micro: the bridge retries automatically.
-- The bridge restores active session-to-key assignments from its state file
-  after a bridge restart.
-- To collect temporary protocol traces, start it with
-  `CLAUDE_MICRO_DEBUG_DIR=/private/tmp/claude-micro-debug`. Normal operation
-  does not retain raw HID reports.
-- Agent-key focus usually takes about 0.3 seconds because macOS must bring the
-  matching iTerm window forward. The Micro-to-bridge part is about 30 ms.
+`npm run doctor` checks Node, tmux, the vendor HID interface, dependencies,
+the Claude Code plugin, the bridge health record, and socket reachability.
+The bridge retries automatically on device reconnect and restores
+session-to-key assignments after a restart. For temporary protocol traces,
+start it with `CLAUDE_MICRO_DEBUG_DIR=/private/tmp/claude-micro-debug`.
 
 ## Uninstall
 
-```sh
-npm run uninstall-plugin
-```
-
-This removes only the managed tmux block and the plugin’s Claude hooks, then
-stops the bridge. Restart tmux to clear its already-loaded key binding. The
-plugin directory is left in place deliberately so removal is recoverable.
+Remove the `@plugin` line (Prefix + alt + u, or delete
+`~/.tmux/plugins/claude-micro`) and run `/plugin uninstall claude-micro` in
+Claude Code. Restart tmux to clear loaded key bindings.
 
 ## Development
 
 ```sh
-npm run verify
-npm run doctor
-npm start
+npm run verify   # syntax checks + tests
+npm start        # run the bridge in the foreground
 ```
 
-Tests cover protocol encoding, hook state mapping, restart slot restoration,
-the reset safety guard, and a clean install/reinstall/uninstall cycle. GitHub
-Actions runs the same verification on clean macOS runners with Node 20 and 22.
+GitHub Actions runs the same verification on macOS runners with Node 20 and 22.

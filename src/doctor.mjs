@@ -11,7 +11,8 @@ const root = path.resolve(here, "..");
 const socketPath = process.env.CLAUDE_MICRO_SOCKET ?? "/private/tmp/claude-micro.sock";
 const healthPath = process.env.CLAUDE_MICRO_HEALTH ?? "/private/tmp/claude-micro-health.json";
 const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
-const entrypoint = path.join(root, "tmux", "claude-micro.tmux");
+const installedPluginsPath = path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json");
+const entrypoint = path.join(root, "claude-micro.tmux");
 
 let failed = false;
 function report(ok, label, detail = "") {
@@ -29,17 +30,26 @@ try {
 const devices = findCodexMicros();
 report(devices.length > 0, "Codex Micro vendor HID interface", devices.length ? `${devices.length} detected` : "connect by USB and grant Input Monitoring");
 report(fs.existsSync(entrypoint), "tmux plugin entrypoint", entrypoint);
+report(fs.existsSync(path.join(root, "node_modules", "node-hid")), "Bridge dependencies", fs.existsSync(path.join(root, "node_modules", "node-hid")) ? "node-hid installed" : `run npm install in ${root}`);
 
-let hooksInstalled = false;
-try {
-  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  hooksInstalled = Object.values(settings.hooks ?? {}).some((groups) =>
-    Array.isArray(groups) && groups.some((group) => group?.hooks?.some((hook) => hook?.command?.includes("claude-micro/src/event.mjs"))),
-  );
-} catch {
-  // Report below.
+function readJson(pathname) {
+  try {
+    return JSON.parse(fs.readFileSync(pathname, "utf8"));
+  } catch {
+    return null;
+  }
 }
-report(hooksInstalled, "Claude Code hooks", hooksInstalled ? settingsPath : "run npm run install-plugin");
+
+const settings = readJson(settingsPath) ?? {};
+const installedPlugins = readJson(installedPluginsPath)?.plugins ?? {};
+const isMicroPlugin = ([key, value]) => key.startsWith("claude-micro@") && Boolean(value);
+const pluginEnabled = Object.entries(settings.enabledPlugins ?? {}).some(isMicroPlugin) || Object.entries(installedPlugins).some(isMicroPlugin);
+report(pluginEnabled, "Claude Code plugin", pluginEnabled ? "claude-micro hooks enabled" : "install with /plugin marketplace add + /plugin install claude-micro");
+
+const legacyHooks = Object.values(settings.hooks ?? {}).some((groups) =>
+  Array.isArray(groups) && groups.some((group) => group?.hooks?.some((hook) => hook?.command?.includes("claude-micro/src/event.mjs"))),
+);
+report(!legacyHooks, "No legacy 0.1.x hooks", legacyHooks ? "run npm run cleanup-legacy to remove duplicates" : "");
 
 let health;
 try {

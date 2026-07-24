@@ -8,5 +8,5 @@ probe.cjs
 src/force-agent-key.mjs
 src/pulse-all.mjs
 src/rpc-probe.mjs
-src/install-tmux.mjs
 start-bridge.command
+harness/

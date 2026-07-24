@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="540" viewBox="0 0 1040 540" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .note { fill: #7d8590; font-size: 15px; }
+    .note-title { fill: #7d8590; font-size: 15px; font-weight: 600; }
+    .leader { stroke: #7d8590; stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+    .keylabel { fill: #d0d3d8; font-size: 14px; text-anchor: middle; }
+    .statelabel { fill: #e8e9eb; font-size: 13px; text-anchor: middle; }
+    .cap { fill: #232327; stroke: #38383e; stroke-width: 1.5; }
+  </style>
+
+  <!-- Device body -->
+  <rect x="44" y="24" width="440" height="476" rx="30" fill="#1a1a1d" stroke="#303036" stroke-width="2"/>
+
+  <!-- Row 1: dial · Agent keys 1–2 · joystick -->
+  <circle cx="108" cy="96" r="44" fill="#242428" stroke="#3a3a40" stroke-width="2"/>
+  <circle cx="108" cy="96" r="32" fill="#1e1e22" stroke="#46464c" stroke-width="1.5"/>
+  <line x1="108" y1="70" x2="108" y2="82" stroke="#8a8d93" stroke-width="2.5" stroke-linecap="round"/>
+
+  <rect x="168" y="52" width="88" height="88" rx="14" fill="#3d3d42" stroke="#e6e6e6" stroke-opacity="0.5" stroke-width="2"/>
+  <rect x="272" y="52" width="88" height="88" rx="14" fill="#1c3faa" stroke="#3b82f6" stroke-width="2"/>
+  <text x="212" y="90" class="statelabel">1</text>
+  <text x="212" y="112" class="statelabel" fill="#b9bcc2">idle</text>
+  <text x="316" y="90" class="statelabel">2</text>
+  <text x="316" y="112" class="statelabel">working</text>
+
+  <circle cx="420" cy="96" r="42" fill="#121215" stroke="#3a3a40" stroke-width="2"/>
+  <circle cx="420" cy="96" r="28" fill="#0c0c0f" stroke="#2c2c32" stroke-width="1.5"/>
+
+  <!-- Row 2: Agent keys 3–6 -->
+  <rect x="64"  y="156" width="88" height="88" rx="14" fill="#8a5a0b" stroke="#f59e0b" stroke-width="2"/>
+  <rect x="168" y="156" width="88" height="88" rx="14" fill="#166534" stroke="#22c55e" stroke-width="2"/>
+  <rect x="272" y="156" width="88" height="88" rx="14" fill="#8a1d1d" stroke="#ef4444" stroke-width="2"/>
+  <rect x="376" y="156" width="88" height="88" rx="14" fill="#3d3d42" stroke="#e6e6e6" stroke-opacity="0.5" stroke-width="2"/>
+  <text x="108" y="194" class="statelabel">3</text>
+  <text x="108" y="216" class="statelabel">waiting</text>
+  <text x="212" y="194" class="statelabel">4</text>
+  <text x="212" y="216" class="statelabel">done</text>
+  <text x="316" y="194" class="statelabel">5</text>
+  <text x="316" y="216" class="statelabel">error</text>
+  <text x="420" y="194" class="statelabel">6</text>
+  <text x="420" y="216" class="statelabel" fill="#b9bcc2">idle</text>
+
+  <!-- Row 3: command keys -->
+  <rect x="64"  y="260" width="88" height="88" rx="14" class="cap"/>
+  <rect x="168" y="260" width="88" height="88" rx="14" class="cap"/>
+  <rect x="272" y="260" width="88" height="88" rx="14" class="cap"/>
+  <rect x="376" y="260" width="88" height="88" rx="14" class="cap"/>
+  <text x="108" y="310" class="keylabel">⌃S</text>
+  <text x="212" y="310" class="keylabel">⌃W</text>
+  <text x="316" y="310" class="keylabel">daw</text>
+  <text x="420" y="310" class="keylabel">⏎</text>
+
+  <!-- Row 4: status LEDs + touch sensor · push-to-talk · bottom-right key -->
+  <circle cx="66" cy="390" r="3.5" fill="#3b82f6"/>
+  <circle cx="66" cy="406" r="3.5" fill="#f59e0b"/>
+  <circle cx="66" cy="422" r="3.5" fill="#a3a35a"/>
+  <circle cx="110" cy="408" r="28" fill="#1e1e22" stroke="#38383e" stroke-width="1.5"/>
+
+  <rect x="168" y="364" width="192" height="88" rx="14" fill="#20291f" stroke="#2ea043" stroke-width="1.5"/>
+  <g stroke="#c8cace" stroke-width="2.5" fill="none" stroke-linecap="round">
+    <rect x="258" y="384" width="12" height="22" rx="6" fill="#c8cace" stroke="none"/>
+    <path d="M254 400 a10 10 0 0 0 20 0"/>
+    <line x1="264" y1="410" x2="264" y2="418"/>
+    <line x1="257" y1="418" x2="271" y2="418"/>
+  </g>
+  <text x="264" y="440" class="statelabel" fill="#9aa0a6">right ⌘</text>
+
+  <rect x="376" y="364" width="88" height="88" rx="14" class="cap"/>
+  <text x="420" y="414" class="keylabel">⌃C</text>
+
+  <!-- Annotations -->
+  <text x="524" y="66" class="note-title">Dial</text>
+  <text x="524" y="86" class="note">turn → ← / → · press → Escape</text>
+
+  <text x="524" y="122" class="note-title">Joystick</text>
+  <text x="524" y="142" class="note">flick → arrow key</text>
+  <path class="leader" d="M464 108 c22 12, 34 16, 52 22"/>
+
+  <text x="524" y="196" class="note-title">Frosted Agent keys 1–6</text>
+  <text x="524" y="216" class="note">live state of six Claude sessions;</text>
+  <text x="524" y="236" class="note">tap → focus its tmux pane (iTerm);</text>
+  <text x="524" y="256" class="note">hold 3 s → clear the assignment</text>
+  <path class="leader" d="M468 200 h48"/>
+
+  <text x="524" y="304" class="note-title">Command keys</text>
+  <text x="524" y="324" class="note">sent to the active tmux pane:</text>
+  <text x="524" y="344" class="note">Ctrl+S · Ctrl+W · daw (Vim) · Return</text>
+  <path class="leader" d="M468 304 h48"/>
+
+  <text x="524" y="392" class="note-title">Push-to-talk</text>
+  <text x="524" y="412" class="note">right ⌘ tap → Whisperflow</text>
+  <path class="leader" d="M364 408 c60 0, 100 -6, 152 -14"/>
+
+  <text x="524" y="448" class="note-title">Interrupt</text>
+  <text x="524" y="468" class="note">Ctrl+C to the active pane</text>
+  <path class="leader" d="M468 442 c20 2, 34 4, 48 8"/>
+
+  <text x="524" y="508" class="note" font-style="italic" font-size="13">Colors show the five bridge states.</text>
+</svg>

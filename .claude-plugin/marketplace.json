@@ -1,0 +1,14 @@
+{
+  "name": "claude-micro",
+  "description": "Work Louder Codex Micro integration for Claude Code: agent-key lighting hooks for the claude-micro tmux bridge.",
+  "owner": {
+    "name": "qGolem"
+  },
+  "plugins": [
+    {
+      "name": "claude-micro",
+      "source": "./",
+      "description": "Forwards Claude Code lifecycle events to the Claude Micro tmux bridge for Codex Micro agent-key lighting."
+    }
+  ]
+}

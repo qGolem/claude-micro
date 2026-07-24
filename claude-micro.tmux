@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
-# Claude Micro tmux plugin entrypoint.
+# Claude Micro tmux plugin entrypoint (TPM-compatible).
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 option() {
   tmux show-option -gqv "$1"
 }
 
 node_bin="$(option @claude_micro_node)"
-if [[ -z "$node_bin" && -r "$root/.claude-micro-node" ]]; then
-  node_bin="$(<"$root/.claude-micro-node")"
-fi
 if [[ -z "$node_bin" || ! -x "$node_bin" ]]; then
-  node_bin="${CLAUDE_MICRO_NODE:-$(command -v node)}"
+  node_bin="${CLAUDE_MICRO_NODE:-$(command -v node || true)}"
+fi
+if [[ -z "$node_bin" ]]; then
+  tmux display-message "claude-micro: Node.js not found — set @claude_micro_node to an absolute Node path"
+  exit 0
+fi
+
+if [[ ! -d "$root/node_modules/node-hid" ]]; then
+  tmux display-message "claude-micro: dependencies missing — run: npm install --prefix $root"
+  exit 0
 fi
 
 reset_key="$(option @claude_micro_reset_key)"
