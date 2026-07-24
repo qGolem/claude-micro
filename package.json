@@ -1,0 +1,17 @@
+{
+  "name": "claude-micro-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/daemon.mjs",
+    "event": "node src/event.mjs",
+    "install-hooks": "node src/install-hooks.mjs",
+    "install-tmux": "node src/install-tmux.mjs",
+    "install-plugin": "node src/install-plugin.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "node-hid": "^3.2.0"
+  }
+}

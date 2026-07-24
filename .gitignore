@@ -1,0 +1,13 @@
+node_modules/
+.DS_Store
+npm-debug.log*
+
+# Local hardware experiments; the bridge runtime does not use these.
+hid-monitor.swift
+probe.cjs
+src/force-agent-key.mjs
+src/pulse-all.mjs
+src/rpc-probe.mjs
+src/install-tmux.mjs
+start-bridge.command
+tmux/claude-micro.tmux
