@@ -11,6 +11,7 @@ const healthPath = process.env.CLAUDE_MICRO_HEALTH ?? "/private/tmp/claude-micro
 const debugDir = process.env.CLAUDE_MICRO_DEBUG_DIR;
 const latencyLogPath = process.env.CLAUDE_MICRO_LATENCY_LOG;
 const maxHookBytes = Number(process.env.CLAUDE_MICRO_MAX_HOOK_BYTES ?? 262_144);
+const agentHoldMs = Number(process.env.CLAUDE_MICRO_AGENT_HOLD_MS ?? 3_000);
 
 function removeSocket() {
   try {
@@ -206,6 +207,34 @@ async function focusAgentSlot(slot, receivedAt = performance.now()) {
   });
 }
 
+const agentHoldTimers = new Map();
+
+function cancelAgentKeyHold(slot) {
+  const timer = agentHoldTimers.get(slot);
+  if (timer) clearTimeout(timer);
+  agentHoldTimers.delete(slot);
+}
+
+async function clearAgentSlot(slot) {
+  const assignment = slots.entries().find((entry) => entry.slot === slot);
+  if (!assignment && agentStates[slot] === "idle" && !agentPanes[slot]) return;
+  if (assignment) slots.release(assignment.sessionId);
+  agentStates[slot] = "idle";
+  agentPanes[slot] = null;
+  writeSlots();
+  await refreshAgentKeys();
+  await run("tmux", ["display-message", `Claude Micro: cleared Agent Key ${slot + 1}.`]);
+}
+
+function beginAgentKeyPress(slot) {
+  cancelAgentKeyHold(slot);
+  void focusAgentSlot(slot, performance.now());
+  agentHoldTimers.set(slot, setTimeout(() => {
+    agentHoldTimers.delete(slot);
+    void clearAgentSlot(slot);
+  }, agentHoldMs));
+}
+
 async function activeTmuxPane() {
   const clients = await runOutput("tmux", ["list-clients", "-F", "#{client_activity}\t#{client_session}"]);
   const session = clients
@@ -302,7 +331,9 @@ function attachInput(handle) {
       if (message?.m === "v.oai.hid" && message?.p?.act === 1) {
         debugLog("hid-keys.log", `${JSON.stringify(message)}\n`);
       }
-      if (message?.p?.act === 1 && /^AG0[0-5]$/.test(key ?? "")) void focusAgentSlot(Number(key.slice(2)), performance.now());
+      const agentSlot = /^AG0[0-5]$/.test(key ?? "") ? Number(key.slice(2)) : null;
+      if (agentSlot !== null && message?.p?.act === 1) beginAgentKeyPress(agentSlot);
+      if (agentSlot !== null && message?.p?.act === 0) cancelAgentKeyHold(agentSlot);
       if (message?.p?.act === 1 && commandKeyActions[key]) void commandKeyActions[key]();
       if (message?.p?.act === 2 && encoderActions[key]) void encoderActions[key]();
       if (message?.m === "v.oai.rad") handleJoystickMove(message.p);
@@ -353,6 +384,7 @@ const server = net.createServer({ allowHalfOpen: true }, (connection) => {
       }
       await refreshAgentKeys();
       if (event.hook_event_name === "SessionEnd") {
+        cancelAgentKeyHold(slot);
         slots.release(sessionId);
         agentPanes[slot] = null;
       }

@@ -88,7 +88,7 @@ you intentionally use a different Node installation.
 
 | Physical control | Action in active tmux pane |
 | --- | --- |
-| Frosted Agent keys 1–6 | focus their assigned Claude pane |
+| Frosted Agent keys 1–6 | tap to focus their assigned Claude pane; hold 3 seconds to clear its assignment |
 | Third-row left | Ctrl+S |
 | Third-row middle-left | Ctrl+W |
 | Third-row middle-right | `daw` (Vim motion) |
