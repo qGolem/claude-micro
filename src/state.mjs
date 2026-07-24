@@ -25,6 +25,14 @@ export function stateForHook(event) {
 export class SessionSlots {
   #slots = new Map();
 
+  constructor(entries = []) {
+    for (const entry of entries) {
+      if (!entry || !Number.isInteger(entry.slot) || entry.slot < 0 || entry.slot > 5 || typeof entry.sessionId !== "string") continue;
+      if (this.#slots.has(entry.sessionId) || Array.from(this.#slots.values()).includes(entry.slot)) continue;
+      this.#slots.set(entry.sessionId, entry.slot);
+    }
+  }
+
   acquire(sessionId) {
     if (this.#slots.has(sessionId)) return this.#slots.get(sessionId);
     const used = new Set(this.#slots.values());
@@ -36,5 +44,9 @@ export class SessionSlots {
 
   release(sessionId) {
     this.#slots.delete(sessionId);
+  }
+
+  entries() {
+    return Array.from(this.#slots, ([sessionId, slot]) => ({ sessionId, slot }));
   }
 }

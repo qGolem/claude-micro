@@ -23,7 +23,7 @@ const recent = health && Date.now() - Date.parse(health.updatedAt) < 4_000;
 if (bridgeRunning() && health?.state === "connected" && recent) {
   process.stdout.write("#[fg=#1e1e2e,bg=#a6e3a1,bold] ◈ MICRO #[fg=default,bg=default,nobold]");
 } else if (bridgeRunning()) {
-  process.stdout.write("#[fg=#1e1e2e,bg=#f9e2af,bold] ◈ MICRO #[fg=default,bg=default,nobold]");
+  process.stdout.write("#[fg=#1e1e2e,bg=#f9e2af,bold] ↻ k #[fg=default,bg=default,nobold]");
 } else {
-  process.stdout.write("#[fg=#1e1e2e,bg=#f38ba8,bold] ◈ MICRO #[fg=default,bg=default,nobold]");
+  process.stdout.write("#[fg=#1e1e2e,bg=#f38ba8,bold] ↻ k #[fg=default,bg=default,nobold]");
 }

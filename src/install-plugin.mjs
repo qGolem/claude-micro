@@ -9,71 +9,85 @@ const sourceRoot = path.resolve(here, "..");
 const destination = process.argv[2] ?? path.join(os.homedir(), ".config", "tmux", "plugins", "claude-micro");
 const tmuxConfig = process.argv[3] ?? path.join(os.homedir(), ".config", "tmux", "tmux.conf");
 const bootstrapConfig = process.argv[4] ?? path.join(os.homedir(), ".tmux.conf");
+const markerStart = "# >>> claude-micro >>>";
+const markerEnd = "# <<< claude-micro <<<";
 
-function tmuxQuote(value) {
-  return value.replaceAll("'", "'\\\"'\\\"'");
+function read(pathname) {
+  try {
+    return fs.readFileSync(pathname, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  }
 }
 
-function currentStatusLeft() {
-  try {
-    return execFileSync("tmux", ["show-options", "-gqv", "status-left"], { encoding: "utf8" }).trim();
-  } catch {
-    return "#S";
-  }
+function atomicWrite(pathname, content) {
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  const temporary = `${pathname}.claude-micro-${process.pid}.tmp`;
+  fs.writeFileSync(temporary, content, "utf8");
+  fs.renameSync(temporary, pathname);
+}
+
+function backupOnce(pathname) {
+  const backup = `${pathname}.before-claude-micro`;
+  if (fs.existsSync(pathname) && !fs.existsSync(backup)) fs.copyFileSync(pathname, backup);
+}
+
+function managedBlock(content, block) {
+  const expression = new RegExp(`\\n?${markerStart.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}[\\s\\S]*?${markerEnd.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\n?`, "g");
+  return `${content.replace(expression, "").trimEnd()}\n\n${markerStart}\n${block}\n${markerEnd}\n`;
+}
+
+if (!fs.existsSync(path.join(sourceRoot, "node_modules"))) {
+  throw new Error("Dependencies are not installed. Run npm install in the plugin repository first.");
 }
 
 fs.mkdirSync(destination, { recursive: true });
-fs.cpSync(path.join(sourceRoot, "src"), path.join(destination, "src"), { recursive: true, force: true, dereference: false });
-for (const script of ["tmux-start-bridge.sh", "tmux-reset-bridge.sh"]) {
-  fs.chmodSync(path.join(destination, "src", script), 0o755);
-}
-if (!fs.existsSync(path.join(destination, "node_modules"))) {
-  if (!fs.existsSync(path.join(sourceRoot, "node_modules"))) {
-    throw new Error("Dependencies are not installed. Run npm install in the plugin repository first.");
-  }
-  fs.cpSync(path.join(sourceRoot, "node_modules"), path.join(destination, "node_modules"), { recursive: true, dereference: false });
+for (const directory of ["src", "tmux", "node_modules"]) {
+  fs.cpSync(path.join(sourceRoot, directory), path.join(destination, directory), {
+    recursive: true,
+    force: true,
+    dereference: false,
+    verbatimSymlinks: true,
+  });
 }
 for (const name of ["package.json", "package-lock.json", "README.md"]) {
-  fs.copyFileSync(path.join(sourceRoot, name), path.join(destination, name));
+  const source = path.join(sourceRoot, name);
+  // npm packages omit package-lock.json. It is useful for a source checkout,
+  // but the already-installed node_modules runtime does not require it.
+  if (fs.existsSync(source)) fs.copyFileSync(source, path.join(destination, name));
 }
+for (const script of ["tmux-start-bridge.sh", "tmux-reset-bridge.sh", "tmux-stop-bridge.sh"]) {
+  fs.chmodSync(path.join(destination, "src", script), 0o755);
+}
+fs.chmodSync(path.join(destination, "tmux", "claude-micro.tmux"), 0o755);
+const nodePathFile = path.join(destination, ".claude-micro-node");
+const installedNode = read(nodePathFile).trim();
+const nodePath = process.env.CLAUDE_MICRO_NODE || (installedNode && fs.existsSync(installedNode) ? installedNode : process.execPath);
+atomicWrite(nodePathFile, `${nodePath}\n`);
 
-const sourceLine = `source-file ${path.join(destination, "tmux", "claude-micro.tmux")}`;
-fs.mkdirSync(path.join(destination, "tmux"), { recursive: true });
-const statusScript = path.join(destination, "src", "tmux-status.mjs");
-const statusCommand = `#(node ${statusScript})`;
-const existingStatus = currentStatusLeft();
-const legacyStatusCommand = `#(${statusScript})`;
-const statusWithoutLegacy = existingStatus
-  .replaceAll(` ${legacyStatusCommand}`, "")
-  .replaceAll(legacyStatusCommand, "")
-  .trim();
-const previousStatus = statusWithoutLegacy.endsWith(` ${statusCommand}`)
-  ? statusWithoutLegacy.slice(0, -(statusCommand.length + 1))
-  : statusWithoutLegacy.startsWith(`${statusCommand} `)
-    ? statusWithoutLegacy.slice(statusCommand.length + 1)
-    : statusWithoutLegacy || "#S";
-const bindings = `# Work Louder Codex Micro / Claude Code tmux integration\nrun-shell -b '${path.join(destination, "src", "tmux-start-bridge.sh")}'\n# Connected = green; reconnecting = amber; stopped = red.\nset-option -g status-interval 2\nset-option -g status-left '${tmuxQuote(`${previousStatus} ${statusCommand}`)}'\n# Prefix + Shift-R resets only the Claude Micro bridge.\nbind-key R run-shell -b '${path.join(destination, "src", "tmux-reset-bridge.sh")}'\n${[1, 2, 3, 4, 5, 6].map((key, slot) => `bind-key -n M-${key} run-shell 'node ${path.join(destination, "src", "focus-slot.mjs")} ${slot}'`).join("\n")}\n`;
-fs.writeFileSync(path.join(destination, "tmux", "claude-micro.tmux"), bindings, "utf8");
-
-let config = fs.existsSync(tmuxConfig) ? fs.readFileSync(tmuxConfig, "utf8") : "";
-config = config
+const entrypoint = path.join(destination, "tmux", "claude-micro.tmux");
+const tmuxBlock = `run-shell '${entrypoint}'`;
+const legacySourceLine = `source-file ${entrypoint}`;
+const config = read(tmuxConfig)
   .split("\n")
-  .filter((line) => !line.includes("claude-micro.tmux"))
-  .join("\n")
-  .trimEnd();
-fs.mkdirSync(path.dirname(tmuxConfig), { recursive: true });
-fs.writeFileSync(tmuxConfig, `${config}\n\n# Codex Micro → Claude Code tmux focus\n${sourceLine}\n`, "utf8");
+  .filter((line) => line.trim() !== legacySourceLine && line.trim() !== "# Codex Micro → Claude Code tmux focus")
+  .join("\n");
+backupOnce(tmuxConfig);
+atomicWrite(tmuxConfig, managedBlock(config, tmuxBlock));
 
 const bootstrapLine = `source-file ${tmuxConfig}`;
-let bootstrap = fs.existsSync(bootstrapConfig) ? fs.readFileSync(bootstrapConfig, "utf8") : "";
+const bootstrap = read(bootstrapConfig);
 if (!bootstrap.split("\n").some((line) => line.trim() === bootstrapLine)) {
-  fs.writeFileSync(bootstrapConfig, `${bootstrap.trimEnd()}\n\n# Load the primary tmux configuration (including Claude Micro).\n${bootstrapLine}\n`, "utf8");
+  backupOnce(bootstrapConfig);
+  atomicWrite(bootstrapConfig, `${bootstrap.trimEnd()}\n\n# Load the primary tmux configuration (including Claude Micro).\n${bootstrapLine}\n`);
 }
 
-// Install hooks from the copied plugin so they continue to work if the source
-// checkout is later moved or removed.
+// Install hooks from the copied plugin so source checkout moves do not break
+// an already-installed integration.
 execFileSync(process.execPath, [path.join(destination, "src", "install-hooks.mjs")], { stdio: "inherit" });
 
 console.log(`Installed tmux plugin: ${destination}`);
 console.log(`Updated tmux config: ${tmuxConfig}`);
-console.log(`Bootstrapped tmux startup: ${bootstrapConfig}`);
+console.log(`Status command: #{@claude_micro_status_command}`);
+console.log("Reset binding: Prefix + k (customize with @claude_micro_reset_key)");

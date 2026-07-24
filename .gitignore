@@ -10,4 +10,3 @@ src/pulse-all.mjs
 src/rpc-probe.mjs
 src/install-tmux.mjs
 start-bridge.command
-tmux/claude-micro.tmux

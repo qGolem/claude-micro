@@ -37,3 +37,20 @@ test("assigns stable slots and reuses released ones", () => {
   slots.release("one");
   assert.equal(slots.acquire("three"), 0);
 });
+
+test("restores valid session slots after a bridge restart", () => {
+  const slots = new SessionSlots([
+    { sessionId: "alpha", slot: 2 },
+    { sessionId: "beta", slot: 5 },
+    { sessionId: "duplicate", slot: 5 },
+    { sessionId: "bad", slot: 9 },
+  ]);
+  assert.equal(slots.acquire("alpha"), 2);
+  assert.equal(slots.acquire("beta"), 5);
+  assert.equal(slots.acquire("gamma"), 0);
+  assert.deepEqual(slots.entries(), [
+    { sessionId: "alpha", slot: 2 },
+    { sessionId: "beta", slot: 5 },
+    { sessionId: "gamma", slot: 0 },
+  ]);
+});

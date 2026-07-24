@@ -2,6 +2,35 @@
   "name": "claude-micro-bridge",
   "private": true,
   "version": "0.1.0",
+  "description": "macOS tmux bridge for the Work Louder Codex Micro and Claude Code.",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "src/daemon.mjs",
+    "src/doctor.mjs",
+    "src/event.mjs",
+    "src/focus-slot.mjs",
+    "src/install-hooks.mjs",
+    "src/install-plugin.mjs",
+    "src/micro.mjs",
+    "src/protocol.mjs",
+    "src/state.mjs",
+    "src/tmux-reset-bridge.sh",
+    "src/tmux-start-bridge.sh",
+    "src/tmux-status.mjs",
+    "src/tmux-stop-bridge.sh",
+    "src/uninstall-plugin.mjs",
+    "tmux/claude-micro.tmux",
+    "README.md"
+  ],
+  "keywords": [
+    "claude-code",
+    "tmux",
+    "codex-micro",
+    "work-louder",
+    "macos"
+  ],
   "type": "module",
   "scripts": {
     "start": "node src/daemon.mjs",
@@ -9,6 +38,10 @@
     "install-hooks": "node src/install-hooks.mjs",
     "install-tmux": "node src/install-tmux.mjs",
     "install-plugin": "node src/install-plugin.mjs",
+    "uninstall-plugin": "node src/uninstall-plugin.mjs",
+    "doctor": "node src/doctor.mjs",
+    "check": "node --check src/*.mjs && bash -n tmux/claude-micro.tmux && zsh -n src/tmux-*.sh",
+    "verify": "npm run check && npm test",
     "test": "node --test"
   },
   "dependencies": {

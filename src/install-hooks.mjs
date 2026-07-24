@@ -55,12 +55,14 @@ for (const [event, matcher] of Object.entries(hookEvents)) {
 }
 
 const backupPath = `${settingsPath}.before-claude-micro`;
-if (fs.existsSync(settingsPath) && !fs.existsSync(backupPath)) fs.copyFileSync(settingsPath, backupPath);
+const settingsExisted = fs.existsSync(settingsPath);
+const backupCreated = settingsExisted && !fs.existsSync(backupPath);
+if (backupCreated) fs.copyFileSync(settingsPath, backupPath);
 fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
 const temporaryPath = `${settingsPath}.claude-micro-tmp`;
 fs.writeFileSync(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
 fs.renameSync(temporaryPath, settingsPath);
 
 console.log(`Installed Claude Micro hooks in ${settingsPath}`);
-console.log(`Backup: ${fs.existsSync(backupPath) ? backupPath : "already exists"}`);
+console.log(`Backup: ${backupCreated ? backupPath : settingsExisted ? "already exists" : "not needed (new settings file)"}`);
 console.log(`Start the bridge with: cd ${bridgeRoot} && npm start`);

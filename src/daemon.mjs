@@ -1,16 +1,39 @@
 import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import { execFile } from "node:child_process";
 import { CodexMicro } from "./micro.mjs";
 import { SessionSlots, stateForHook } from "./state.mjs";
 
 const socketPath = process.env.CLAUDE_MICRO_SOCKET ?? "/private/tmp/claude-micro.sock";
 const slotsPath = process.env.CLAUDE_MICRO_SLOTS ?? "/private/tmp/claude-micro-slots.json";
-const focusLogPath = process.env.CLAUDE_MICRO_FOCUS_LOG ?? "/private/tmp/claude-micro-focus.log";
-const commandLogPath = process.env.CLAUDE_MICRO_COMMAND_LOG ?? "/private/tmp/claude-micro-command-keys.log";
-const rawCommandLogPath = process.env.CLAUDE_MICRO_RAW_COMMAND_LOG ?? "/private/tmp/claude-micro-command-raw.log";
 const healthPath = process.env.CLAUDE_MICRO_HEALTH ?? "/private/tmp/claude-micro-health.json";
-if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath);
+const debugDir = process.env.CLAUDE_MICRO_DEBUG_DIR;
+const latencyLogPath = process.env.CLAUDE_MICRO_LATENCY_LOG;
+const maxHookBytes = Number(process.env.CLAUDE_MICRO_MAX_HOOK_BYTES ?? 262_144);
+
+function removeSocket() {
+  try {
+    const stat = fs.lstatSync(socketPath);
+    if (!stat.isSocket()) throw new Error(`Refusing to remove non-socket path: ${socketPath}`);
+    fs.unlinkSync(socketPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
+function debugLog(name, value) {
+  if (!debugDir) return;
+  fs.mkdirSync(debugDir, { recursive: true, mode: 0o700 });
+  fs.appendFileSync(path.join(debugDir, name), value, { mode: 0o600 });
+}
+
+function latencyLog(entry) {
+  if (!latencyLogPath) return;
+  fs.appendFileSync(latencyLogPath, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, { mode: 0o600 });
+}
+
+removeSocket();
 
 let healthState = null;
 let healthWrittenAt = 0;
@@ -24,11 +47,34 @@ function writeHealth(state, force = false) {
   fs.renameSync(temporaryPath, healthPath);
 }
 
-let micro = await CodexMicro.connect();
-writeHealth("connected", true);
-const slots = new SessionSlots();
+function restoredSlotState() {
+  try {
+    const stored = JSON.parse(fs.readFileSync(slotsPath, "utf8"));
+    return Array.isArray(stored?.slots) ? stored.slots : [];
+  } catch {
+    return [];
+  }
+}
+
+const storedSlots = restoredSlotState();
+const slots = new SessionSlots(storedSlots.map(({ sessionId, id }) => ({ sessionId, slot: id })));
 const agentStates = Array(6).fill("idle");
 const agentPanes = Array(6).fill(null);
+for (const record of storedSlots) {
+  if (!Number.isInteger(record?.id) || record.id < 0 || record.id > 5 || typeof record?.sessionId !== "string") continue;
+  agentStates[record.id] = typeof record.state === "string" ? record.state : "idle";
+  agentPanes[record.id] = typeof record.tmuxPane === "string" ? record.tmuxPane : null;
+}
+
+writeHealth("starting", true);
+let micro;
+try {
+  micro = await CodexMicro.connect();
+  writeHealth("connected", true);
+} catch (error) {
+  writeHealth("disconnected", true);
+  throw error;
+}
 let refreshing = false;
 let reconnecting = false;
 
@@ -81,7 +127,8 @@ async function refreshAgentKeys() {
 }
 
 function writeSlots() {
-  const payload = { slots: agentStates.map((state, id) => ({ id, state, tmuxPane: agentPanes[id] })) };
+  const sessionIds = new Map(slots.entries().map(({ sessionId, slot }) => [slot, sessionId]));
+  const payload = { slots: agentStates.map((state, id) => ({ id, state, tmuxPane: agentPanes[id], sessionId: sessionIds.get(id) ?? null })) };
   const temporaryPath = `${slotsPath}.${process.pid}.tmp`;
   fs.writeFileSync(temporaryPath, `${JSON.stringify(payload)}\n`, "utf8");
   fs.renameSync(temporaryPath, slotsPath);
@@ -92,7 +139,7 @@ const refreshTimer = setInterval(() => void refreshAgentKeys(), 75);
 
 function run(command, args) {
   return new Promise((resolve) => execFile(command, args, (error, _stdout, stderr) => {
-    if (error) fs.appendFileSync(focusLogPath, `${new Date().toISOString()} ${command}: ${stderr || error.message}\n`);
+    if (error) debugLog("bridge.log", `${new Date().toISOString()} ${command}: ${stderr || error.message}\n`);
     resolve("");
   }));
 }
@@ -123,22 +170,40 @@ end run`;
   await run("osascript", ["-e", script, tty]);
 }
 
-async function focusAgentSlot(slot) {
+async function focusAgentSlot(slot, receivedAt = performance.now()) {
   const pane = agentPanes[slot];
   if (!pane) return;
   // Codex handles the same native Agent-key event. Let that finish, then bring
   // the tmux/iTerm target forward so Layer 1 can be used for Claude navigation.
   await new Promise((resolve) => setTimeout(resolve, 30));
+  const afterNativeKey = performance.now();
   const session = await runOutput("tmux", ["display-message", "-p", "-t", pane, "#{session_name}"]);
   const clients = await runOutput("tmux", ["list-clients", "-F", "#{client_tty}\t#{client_session}"]);
   const tty = clients
     .split("\n")
     .map((line) => line.split("\t"))
     .find(([, clientSession]) => clientSession === session)?.[0];
-  if (tty) await run("tmux", ["switch-client", "-c", tty, "-t", session]);
-  await run("tmux", ["select-window", "-t", pane]);
-  await run("tmux", ["select-pane", "-t", pane]);
-  if (tty) await focusITermTty(tty);
+  // Bringing the correct iTerm session forward is independent of selecting
+  // its tmux pane. Start both operations together: invoking osascript costs
+  // roughly 200 ms on macOS, so serializing it after tmux is perceptible.
+  const iTermFocus = tty ? focusITermTty(tty) : null;
+  // Send the focus sequence to tmux as one command rather than paying a
+  // process launch and client/server round-trip for each selection.
+  const focusCommand = [];
+  if (tty) focusCommand.push("switch-client", "-c", tty, "-t", session, ";");
+  focusCommand.push("select-window", "-t", pane, ";", "select-pane", "-t", pane);
+  await run("tmux", focusCommand);
+  const afterTmux = performance.now();
+  if (iTermFocus) await iTermFocus;
+  const completeAt = performance.now();
+  latencyLog({
+    slot: slot + 1,
+    pane,
+    nativeDelayMs: Math.round(afterNativeKey - receivedAt),
+    tmuxFocusMs: Math.round(afterTmux - afterNativeKey),
+    iTermFocusMs: Math.round(completeAt - afterTmux),
+    totalMs: Math.round(completeAt - receivedAt),
+  });
 }
 
 async function activeTmuxPane() {
@@ -192,7 +257,7 @@ const commandKeyActions = {
 
 // Encoder turns use the same custom HID channel as key presses, but firmware
 // labels the turn action as 2 rather than a normal press (1). On this unit,
-// the physical left turn reports ENC_CW and the physical right turn ENC_CCW.
+// the physical left turn reports ENC_CW and the physical right turn ENC_CC.
 const encoderActions = {
   ENC_CW: () => sendToActivePane("Left"),
   ENC_CC: () => sendToActivePane("Right"),
@@ -217,15 +282,14 @@ function handleJoystickMove(position) {
 }
 
 let hidBuffer = "";
-fs.writeFileSync(rawCommandLogPath, "");
 function attachInput(handle) {
   handle.onInput((report) => {
   const data = Buffer.from(report);
-  // Keep every report except the bridge's own frequent lighting acknowledgements
-  // while discovering the locked Layer 1 Command-key input format.
+  // Raw protocol traces are useful for discovering firmware controls, but are
+  // deliberately opt-in so a normal bridge never accumulates device data.
   const payloadText = data[1] === 2 ? data.subarray(3, 3 + data[2]).toString("utf8") : "";
   if (!payloadText.includes('"method":"v.oai.thstatus"')) {
-    fs.appendFileSync(rawCommandLogPath, `${Date.now()} ${data.toString("hex")}\n`);
+    debugLog("hid-raw.log", `${Date.now()} ${data.toString("hex")}\n`);
   }
   if (data[1] !== 2 || data[2] === 0) return;
   hidBuffer += data.subarray(3, 3 + data[2]).toString("utf8");
@@ -236,9 +300,9 @@ function attachInput(handle) {
       const message = JSON.parse(line);
       const key = message?.m === "v.oai.hid" ? message.p?.k : null;
       if (message?.m === "v.oai.hid" && message?.p?.act === 1) {
-        fs.appendFileSync(commandLogPath, `${JSON.stringify(message)}\n`);
+        debugLog("hid-keys.log", `${JSON.stringify(message)}\n`);
       }
-      if (message?.p?.act === 1 && /^AG0[0-5]$/.test(key ?? "")) void focusAgentSlot(Number(key.slice(2)));
+      if (message?.p?.act === 1 && /^AG0[0-5]$/.test(key ?? "")) void focusAgentSlot(Number(key.slice(2)), performance.now());
       if (message?.p?.act === 1 && commandKeyActions[key]) void commandKeyActions[key]();
       if (message?.p?.act === 2 && encoderActions[key]) void encoderActions[key]();
       if (message?.m === "v.oai.rad") handleJoystickMove(message.p);
@@ -252,20 +316,41 @@ attachInput(micro);
 
 const server = net.createServer({ allowHalfOpen: true }, (connection) => {
   let body = "";
+  let oversized = false;
   connection.setEncoding("utf8");
+  connection.setTimeout(3_000, () => connection.destroy());
   // A Claude hook may exit as soon as it has sent the event. Keep that normal
   // half-close from becoming an unhandled socket error in the bridge.
   connection.on("error", () => {});
-  connection.on("data", (chunk) => (body += chunk));
+  connection.on("data", (chunk) => {
+    body += chunk;
+    if (body.length > maxHookBytes) {
+      oversized = true;
+      connection.destroy();
+    }
+  });
   connection.on("end", async () => {
     try {
+      if (oversized) throw new Error("Hook payload exceeds the bridge limit.");
       const event = JSON.parse(body);
+      if (event?.op === "claude-micro.health") {
+        connection.end(JSON.stringify({ ok: true, state: healthState, pid: process.pid }));
+        return;
+      }
       const state = stateForHook(event);
       const sessionId = event.session_id ?? event.sessionId;
       if (!state || !sessionId) throw new Error("Hook event did not include a supported state and session_id.");
       const slot = slots.acquire(sessionId);
       agentStates[slot] = state;
-      if (event.tmux_pane) agentPanes[slot] = event.tmux_pane;
+      if (event.tmux_pane) {
+        agentPanes[slot] = event.tmux_pane;
+      } else if (!agentPanes[slot]) {
+        // TMUX_PANE is normally inherited by Claude's hook command.  If a
+        // launcher strips it, use the most recently active tmux pane as a
+        // conservative first-session fallback rather than leaving an Agent
+        // Key with a status light but no navigation target.
+        agentPanes[slot] = await activeTmuxPane();
+      }
       await refreshAgentKeys();
       if (event.hook_event_name === "SessionEnd") {
         slots.release(sessionId);
@@ -279,7 +364,10 @@ const server = net.createServer({ allowHalfOpen: true }, (connection) => {
   });
 });
 
-server.listen(socketPath, () => console.log(`Claude Micro bridge listening on ${socketPath}`));
+server.listen(socketPath, () => {
+  fs.chmodSync(socketPath, 0o600);
+  console.log(`Claude Micro bridge listening on ${socketPath}`);
+});
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, async () => {
     server.close();
@@ -291,6 +379,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
       // A USB reset can invalidate the handle while shutting down.
     }
     writeHealth("stopped", true);
+    removeSocket();
     process.exit(0);
   });
 }

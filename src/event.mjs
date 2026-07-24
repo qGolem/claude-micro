@@ -32,11 +32,33 @@ try {
   // Let the daemon report malformed hook payloads in its normal response.
 }
 
+const timeoutMs = Number(process.env.CLAUDE_MICRO_HOOK_TIMEOUT_MS ?? 1_500);
 const client = net.createConnection(socketPath);
-client.end(body);
+let response = "";
+let finished = false;
+const timeout = setTimeout(() => finish(new Error(`bridge did not respond within ${timeoutMs}ms`)), timeoutMs);
+
+function finish(error) {
+  if (finished) return;
+  finished = true;
+  clearTimeout(timeout);
+  client.destroy();
+  if (error) {
+    console.error(`Claude Micro bridge unavailable: ${error.message}`);
+    process.exitCode = 1;
+  }
+}
+
+client.on("connect", () => client.end(body));
 client.setEncoding("utf8");
-client.on("data", (data) => process.stdout.write(data));
-client.on("error", (error) => {
-  console.error(`Claude Micro bridge unavailable: ${error.message}`);
-  process.exitCode = 1;
+client.on("data", (data) => (response += data));
+client.on("end", () => {
+  try {
+    const result = JSON.parse(response);
+    if (!result?.ok) throw new Error(result?.error ?? "bridge rejected the hook event");
+    finish();
+  } catch (error) {
+    finish(error);
+  }
 });
+client.on("error", finish);
