@@ -84,6 +84,49 @@ if (runningBridge && process.env.CLAUDE_MICRO_REPLACE !== "1") {
   process.exit(1);
 }
 
+// The socket guard above only stops a second daemon on the SAME socket path.
+// Two daemons on different socket paths still open the same physical device
+// (node-hid is opened non-exclusively) and both drive the LEDs on their own
+// 75 ms cycle — which looks like strobing, and lets one close the handle while
+// the other is mid-write. This lock is keyed to the device, not the socket.
+const deviceLockPath = process.env.CLAUDE_MICRO_DEVICE_LOCK ?? "/private/tmp/claude-micro-device.lock";
+
+function holderOfDeviceLock(): number | null {
+  let recorded: string;
+  try {
+    recorded = fs.readFileSync(deviceLockPath, "utf8").trim();
+  } catch {
+    return null;
+  }
+  const pid = Number(recorded);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return null; // Recorded process is gone; the lock is stale.
+  }
+  return pid;
+}
+
+function acquireDeviceLock(): void {
+  const holder = holderOfDeviceLock();
+  if (holder !== null && holder !== process.pid && process.env.CLAUDE_MICRO_REPLACE !== "1") {
+    console.error(
+      `Claude Micro: another bridge is already running (pid ${holder}) and holding the Codex Micro.\n` +
+        "Two daemons drive the LEDs on separate cycles, which shows up as strobing. Stop that one first\n" +
+        "(Prefix + K), or set CLAUDE_MICRO_REPLACE=1 to take over.",
+    );
+    process.exit(1);
+  }
+  writeFileAtomically(deviceLockPath, `${process.pid}\n`);
+}
+
+function releaseDeviceLock(): void {
+  if (holderOfDeviceLock() === process.pid) fs.rmSync(deviceLockPath, { force: true });
+}
+
+acquireDeviceLock();
+
 // Every append-only diagnostic file the daemon owns goes through here, so no
 // sink can grow without bound. Sizes are tracked in memory after the first
 // stat, and each file stops (loudly, once) at the cap rather than rotating —
@@ -213,17 +256,43 @@ for (const record of storedSlots) {
   agentPanes[slotIndex] = typeof record.tmuxPane === "string" ? record.tmuxPane : null;
 }
 
+// A background service must not die on a transient fault: losing the process
+// loses the socket, the slot assignments, and the device, and nothing restarts
+// it until the user presses Prefix + k. The historical crashes were all this
+// shape — an async device write rejecting with no handler attached.
+process.on("unhandledRejection", (reason) => {
+  reportRepeating(`Claude Micro: unhandled rejection — ${reason instanceof Error ? reason.message : String(reason)}`);
+  if (isDeviceFault(reason)) void reconnectMicro();
+});
+process.on("uncaughtException", (error) => {
+  reportRepeating(`Claude Micro: uncaught exception — ${error.message}`);
+  debugLog("bridge.log", `${new Date().toISOString()} uncaught: ${error.stack}\n`);
+  if (isDeviceFault(error)) void reconnectMicro();
+});
+
+/** Whether a failure means the HID handle is gone and a reconnect is due. */
+function isDeviceFault(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /device|hid|disconnect|IOHID/i.test(message);
+}
+
 writeHealth("starting", true);
-let micro: CodexMicro;
+let micro: CodexMicro | null = null;
+let refreshing = false;
+let reconnecting = false;
+let refreshInFlight: Promise<unknown> | null = null;
+
 try {
   micro = await CodexMicro.connect();
   writeHealth("connected", true);
 } catch (error) {
+  // Starting without the device is a normal state — it may be unplugged, or
+  // asleep. Serve the socket, keep the slot bookkeeping, and pick the device
+  // up when it appears; exiting here just left the user with no bridge.
+  reportRepeating(`Claude Micro: starting without the device — ${(error as Error).message}`);
   writeHealth("disconnected", true);
-  throw error;
+  void reconnectMicro();
 }
-let refreshing = false;
-let reconnecting = false;
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -231,11 +300,22 @@ async function reconnectMicro(): Promise<void> {
   if (reconnecting) return;
   reconnecting = true;
   try {
+    // Closing under an in-flight write is what produced ~14k "device has been
+    // closed" errors: the refresh holds the old handle across its await, and
+    // the reconnect pulled it out from under it. Let that write settle first.
+    if (refreshInFlight) {
+      try {
+        await withDeviceTimeout(Promise.resolve(refreshInFlight), "in-flight refresh");
+      } catch {
+        // Settled or timed out; either way the handle is ours to close now.
+      }
+    }
     try {
-      await withDeviceTimeout(micro.close(), "device close");
+      if (micro) await withDeviceTimeout(micro.close(), "device close");
     } catch {
       // The old handle may already be invalid, or hung, after a USB/HID reset.
     }
+    micro = null;
     for (let attempt = 0; attempt < 10; attempt += 1) {
       try {
         micro = await withDeviceTimeout(CodexMicro.connect(), "device connect");
@@ -262,18 +342,23 @@ function agentKeyLightingSnapshot() {
 async function refreshAgentKeys(): Promise<void> {
   if (refreshing) return;
   if (reconnecting) return;
+  const handle = micro;
+  if (!handle) return;
   refreshing = true;
   try {
     // ChatGPT Codex can also publish an idle state. Refreshing only the
     // per-thread channel lets Claude own the Agent LEDs without changing the
     // Input layer or the frame/background RGB configuration.
-    await withDeviceTimeout(micro.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot()), "agent-key refresh");
+    const write = handle.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot());
+    refreshInFlight = write;
+    await withDeviceTimeout(write, "agent-key refresh");
     writeHealth("connected");
   } catch (error) {
     reportRepeating(`Claude Micro refresh failed: ${(error as Error).message}`);
     writeHealth("reconnecting", true);
     void reconnectMicro();
   } finally {
+    refreshInFlight = null;
     refreshing = false;
   }
 }
@@ -511,7 +596,9 @@ function attachInput(handle: CodexMicro): void {
     }
   });
 }
-attachInput(micro);
+// May be null when the device was absent at startup; reconnectMicro attaches
+// the listener to each new handle it opens.
+if (micro) attachInput(micro);
 
 const server = net.createServer({ allowHalfOpen: true }, (connection) => {
   let body = "";
@@ -577,19 +664,37 @@ server.listen(socketPath, () => {
 });
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
-    server.close();
-    clearInterval(refreshTimer);
+    // Every step here is best-effort: the historical fatal crashes were an
+    // async shutdown handler rejecting, which turns a clean stop into a crash
+    // that leaves the socket behind.
     try {
-      await micro.sendRequest(
-        RpcMethod.agentKeyStatus,
-        agentStates.map((_state, agentKeyIndex) => agentKeyLightingForState(agentKeyIndex, "idle")),
-      );
-      await micro.close();
-    } catch {
-      // A USB reset can invalidate the handle while shutting down.
+      server.close();
+      clearInterval(refreshTimer);
+      try {
+        if (micro) {
+          await withDeviceTimeout(
+            micro.sendRequest(
+              RpcMethod.agentKeyStatus,
+              agentStates.map((_state, agentKeyIndex) => agentKeyLightingForState(agentKeyIndex, "idle")),
+            ),
+            "shutdown blank",
+          );
+          await withDeviceTimeout(micro.close(), "shutdown close");
+        }
+      } catch {
+        // A USB reset can invalidate the handle while shutting down.
+      }
+      try {
+        writeHealth("stopped", true);
+      } catch {
+        // Losing the health record must not stop us releasing the socket.
+      }
+      removeSocket();
+      releaseDeviceLock();
+    } catch (error) {
+      console.error(`Claude Micro: shutdown completed with errors — ${(error as Error).message}`);
+    } finally {
+      process.exit(0);
     }
-    writeHealth("stopped", true);
-    removeSocket();
-    process.exit(0);
   });
 }

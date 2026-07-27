@@ -165,6 +165,40 @@ Stop it first (Prefix + k restarts the tmux-managed bridge), or set CLAUDE_MICRO
   );
   process.exit(1);
 }
+var deviceLockPath = process.env.CLAUDE_MICRO_DEVICE_LOCK ?? "/private/tmp/claude-micro-device.lock";
+function holderOfDeviceLock() {
+  let recorded;
+  try {
+    recorded = fs.readFileSync(deviceLockPath, "utf8").trim();
+  } catch {
+    return null;
+  }
+  const pid = Number(recorded);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return null;
+  }
+  return pid;
+}
+function acquireDeviceLock() {
+  const holder = holderOfDeviceLock();
+  if (holder !== null && holder !== process.pid && process.env.CLAUDE_MICRO_REPLACE !== "1") {
+    console.error(
+      `Claude Micro: another bridge is already running (pid ${holder}) and holding the Codex Micro.
+Two daemons drive the LEDs on separate cycles, which shows up as strobing. Stop that one first
+(Prefix + K), or set CLAUDE_MICRO_REPLACE=1 to take over.`
+    );
+    process.exit(1);
+  }
+  writeFileAtomically(deviceLockPath, `${process.pid}
+`);
+}
+function releaseDeviceLock() {
+  if (holderOfDeviceLock() === process.pid) fs.rmSync(deviceLockPath, { force: true });
+}
+acquireDeviceLock();
 var appendedFileBytes = /* @__PURE__ */ new Map();
 function appendCapped(target, value, capBytes) {
   let written = appendedFileBytes.get(target);
@@ -272,26 +306,49 @@ for (const record of storedSlots) {
   agentStates[slotIndex] = typeof record.state === "string" ? record.state : "idle";
   agentPanes[slotIndex] = typeof record.tmuxPane === "string" ? record.tmuxPane : null;
 }
+process.on("unhandledRejection", (reason) => {
+  reportRepeating(`Claude Micro: unhandled rejection \u2014 ${reason instanceof Error ? reason.message : String(reason)}`);
+  if (isDeviceFault(reason)) void reconnectMicro();
+});
+process.on("uncaughtException", (error) => {
+  reportRepeating(`Claude Micro: uncaught exception \u2014 ${error.message}`);
+  debugLog("bridge.log", `${(/* @__PURE__ */ new Date()).toISOString()} uncaught: ${error.stack}
+`);
+  if (isDeviceFault(error)) void reconnectMicro();
+});
+function isDeviceFault(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /device|hid|disconnect|IOHID/i.test(message);
+}
 writeHealth("starting", true);
-var micro;
+var micro = null;
+var refreshing = false;
+var reconnecting = false;
+var refreshInFlight = null;
 try {
   micro = await CodexMicro.connect();
   writeHealth("connected", true);
 } catch (error) {
+  reportRepeating(`Claude Micro: starting without the device \u2014 ${error.message}`);
   writeHealth("disconnected", true);
-  throw error;
+  void reconnectMicro();
 }
-var refreshing = false;
-var reconnecting = false;
 var sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 async function reconnectMicro() {
   if (reconnecting) return;
   reconnecting = true;
   try {
+    if (refreshInFlight) {
+      try {
+        await withDeviceTimeout(Promise.resolve(refreshInFlight), "in-flight refresh");
+      } catch {
+      }
+    }
     try {
-      await withDeviceTimeout(micro.close(), "device close");
+      if (micro) await withDeviceTimeout(micro.close(), "device close");
     } catch {
     }
+    micro = null;
     for (let attempt = 0; attempt < 10; attempt += 1) {
       try {
         micro = await withDeviceTimeout(CodexMicro.connect(), "device connect");
@@ -316,15 +373,20 @@ function agentKeyLightingSnapshot() {
 async function refreshAgentKeys() {
   if (refreshing) return;
   if (reconnecting) return;
+  const handle = micro;
+  if (!handle) return;
   refreshing = true;
   try {
-    await withDeviceTimeout(micro.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot()), "agent-key refresh");
+    const write = handle.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot());
+    refreshInFlight = write;
+    await withDeviceTimeout(write, "agent-key refresh");
     writeHealth("connected");
   } catch (error) {
     reportRepeating(`Claude Micro refresh failed: ${error.message}`);
     writeHealth("reconnecting", true);
     void reconnectMicro();
   } finally {
+    refreshInFlight = null;
     refreshing = false;
   }
 }
@@ -511,7 +573,7 @@ function attachInput(handle) {
     }
   });
 }
-attachInput(micro);
+if (micro) attachInput(micro);
 var server = net.createServer({ allowHalfOpen: true }, (connection) => {
   let body = "";
   let oversized = false;
@@ -567,18 +629,32 @@ server.listen(socketPath, () => {
 });
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, async () => {
-    server.close();
-    clearInterval(refreshTimer);
     try {
-      await micro.sendRequest(
-        RpcMethod.agentKeyStatus,
-        agentStates.map((_state, agentKeyIndex) => agentKeyLightingForState(agentKeyIndex, "idle"))
-      );
-      await micro.close();
-    } catch {
+      server.close();
+      clearInterval(refreshTimer);
+      try {
+        if (micro) {
+          await withDeviceTimeout(
+            micro.sendRequest(
+              RpcMethod.agentKeyStatus,
+              agentStates.map((_state, agentKeyIndex) => agentKeyLightingForState(agentKeyIndex, "idle"))
+            ),
+            "shutdown blank"
+          );
+          await withDeviceTimeout(micro.close(), "shutdown close");
+        }
+      } catch {
+      }
+      try {
+        writeHealth("stopped", true);
+      } catch {
+      }
+      removeSocket();
+      releaseDeviceLock();
+    } catch (error) {
+      console.error(`Claude Micro: shutdown completed with errors \u2014 ${error.message}`);
+    } finally {
+      process.exit(0);
     }
-    writeHealth("stopped", true);
-    removeSocket();
-    process.exit(0);
   });
 }

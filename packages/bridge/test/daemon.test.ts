@@ -18,14 +18,21 @@ import test from "node:test";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+// CLAUDE_MICRO_STUB_FAULT drives the failure modes seen in the real daemon
+// log: "absent" = no device to enumerate, "write" = writes reject the way a
+// disconnected HID handle does, "closed" = the handle reports itself closed.
 const HID_STUB = `import { EventEmitter } from "node:events";
 
+const fault = () => process.env.CLAUDE_MICRO_STUB_FAULT ?? "";
+
 export function devices() {
+  if (fault() === "absent") return [];
   return [{ vendorId: 0x303a, productId: 0x8360, usagePage: 0xff00, path: "stub-device" }];
 }
 
 export class HIDAsync extends EventEmitter {
   static async open() {
+    if (fault() === "absent") throw new Error("cannot open device");
     const device = new HIDAsync();
     // Each stdin line is one hex-encoded 64-byte report.
     let pending = "";
@@ -40,9 +47,15 @@ export class HIDAsync extends EventEmitter {
     });
     return device;
   }
-  async write(packet) { return packet.length; }
+  async write(packet) {
+    if (fault() === "write") throw new Error("Cannot write to hid device: Device is disconnected");
+    if (fault() === "closed") throw new TypeError("device has been closed");
+    return packet.length;
+  }
   async read() { return null; }
-  async close() {}
+  async close() {
+    if (fault() === "closed") throw new TypeError("device has been closed");
+  }
 }
 `;
 
@@ -101,7 +114,7 @@ async function waitFor(predicate: () => boolean, description: string, timeoutMs 
   throw new Error(`timed out waiting for ${description}`);
 }
 
-async function startSandboxDaemon(): Promise<Sandbox> {
+async function startSandboxDaemon(extraEnv: Record<string, string> = {}, waitForSocket = true): Promise<Sandbox> {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-daemon-"));
   // node-hid stays external in the build, so a sibling node_modules resolves it.
   const stubDirectory = path.join(directory, "node_modules", "node-hid");
@@ -126,15 +139,18 @@ async function startSandboxDaemon(): Promise<Sandbox> {
       CLAUDE_MICRO_SOCKET: socketPath,
       CLAUDE_MICRO_SLOTS: slotsPath,
       CLAUDE_MICRO_HEALTH: path.join(directory, "health.json"),
+      // Sandboxed so tests never contend for the real device lock.
+      CLAUDE_MICRO_DEVICE_LOCK: path.join(directory, "device.lock"),
       CLAUDE_MICRO_AGENT_HOLD_MS: "400",
       CLAUDE_MICRO_TEST_TMUX_LOG: tmuxLogPath,
+      ...extraEnv,
     },
     stdio: ["pipe", "pipe", "pipe"],
   }) as ChildProcessWithoutNullStreams;
   daemon.stdout.resume();
   daemon.stderr.resume();
 
-  await waitFor(() => fs.existsSync(socketPath), "the daemon socket");
+  if (waitForSocket) await waitFor(() => fs.existsSync(socketPath), "the daemon socket");
   return { directory, daemon, socketPath, slotsPath, tmuxLogPath };
 }
 
@@ -271,6 +287,8 @@ test("diagnostic traces stop at their cap instead of growing without bound", asy
       CLAUDE_MICRO_SOCKET: socketPath,
       CLAUDE_MICRO_SLOTS: path.join(directory, "slots.json"),
       CLAUDE_MICRO_HEALTH: path.join(directory, "health.json"),
+      // Sandboxed so tests never contend for the real device lock.
+      CLAUDE_MICRO_DEVICE_LOCK: path.join(directory, "device.lock"),
       CLAUDE_MICRO_DEBUG_DIR: debugDirectory,
       CLAUDE_MICRO_MAX_DEBUG_BYTES: String(capBytes),
     },
@@ -302,6 +320,97 @@ test("diagnostic traces stop at their cap instead of growing without bound", asy
     return fs.statSync(rawTrace).size;
   })();
   assert.equal(sizeAfterMore, size, "no further growth once the cap is reached");
+});
+
+// The real daemon log recorded 8 fatal crashes and 42 restarts, every crash an
+// async device call rejecting with no handler. These pin each failure mode.
+test("starts and serves hooks even with no device present", async (context) => {
+  const sandbox = await startSandboxDaemon({ CLAUDE_MICRO_STUB_FAULT: "absent" });
+  context.after(() => stopSandbox(sandbox));
+
+  const response = JSON.parse(await sendHook(sandbox.socketPath, { hook_event_name: "Stop", session_id: "no-device" }));
+  assert.equal(response.ok, true, "slot bookkeeping works without the device");
+  assert.equal(sandbox.daemon.exitCode, null, "an absent device is not fatal");
+});
+
+test("survives a device that rejects every write", async (context) => {
+  // Historical crash: "Cannot write to hid device: Device is disconnected"
+  // escaping the refresh loop and killing the process.
+  const sandbox = await startSandboxDaemon({ CLAUDE_MICRO_STUB_FAULT: "write" });
+  context.after(() => stopSandbox(sandbox));
+
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  assert.equal(sandbox.daemon.exitCode, null, "write failures did not kill the daemon");
+  const response = JSON.parse(await sendHook(sandbox.socketPath, { hook_event_name: "Stop", session_id: "writes-fail" }));
+  assert.equal(response.ok, true, "still serving hooks while the device is unusable");
+});
+
+test("survives a handle that reports itself closed", async (context) => {
+  // Historical crash: TypeError "device has been closed" — ~14k occurrences,
+  // caused by a reconnect closing the handle under an in-flight refresh.
+  const sandbox = await startSandboxDaemon({ CLAUDE_MICRO_STUB_FAULT: "closed" });
+  context.after(() => stopSandbox(sandbox));
+
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  assert.equal(sandbox.daemon.exitCode, null, "a closed handle did not kill the daemon");
+});
+
+test("shuts down cleanly even when the device is failing", async (context) => {
+  // Historical crash: the SIGTERM handler blanked the keys, the write rejected,
+  // and the unhandled rejection turned a clean stop into a crash that left the
+  // socket behind — which then made every hook error.
+  const sandbox = await startSandboxDaemon({ CLAUDE_MICRO_STUB_FAULT: "write" });
+  context.after(() => stopSandbox(sandbox));
+
+  sandbox.daemon.kill("SIGTERM");
+  const exitCode: number = await new Promise((resolve) => sandbox.daemon.on("exit", (code) => resolve(code ?? -1)));
+  assert.equal(exitCode, 0, "clean exit despite a failing device");
+  assert.equal(fs.existsSync(sandbox.socketPath), false, "socket released so the next start is clean");
+});
+
+test("refuses to start when another daemon holds the device, even on a different socket", async (context) => {
+  // The socket guard alone does not cover this: two daemons with different
+  // socket paths still open the same physical device non-exclusively and drive
+  // the LEDs on separate 75ms cycles, which shows up as strobing.
+  const sandbox = await startSandboxDaemon();
+  context.after(() => stopSandbox(sandbox));
+
+  const otherDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-second-"));
+  context.after(() => fs.rmSync(otherDirectory, { recursive: true, force: true }));
+  const second = spawn(process.execPath, [path.join(sandbox.directory, "dist", "daemon.js")], {
+    env: {
+      ...process.env,
+      // Everything distinct EXCEPT the device lock — a separate bridge that
+      // would happily share the hardware.
+      CLAUDE_MICRO_SOCKET: path.join(otherDirectory, "other.sock"),
+      CLAUDE_MICRO_SLOTS: path.join(otherDirectory, "other.json"),
+      CLAUDE_MICRO_HEALTH: path.join(otherDirectory, "other-health.json"),
+      CLAUDE_MICRO_DEVICE_LOCK: path.join(sandbox.directory, "device.lock"),
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stderr = "";
+  second.stderr.on("data", (chunk) => (stderr += chunk));
+  const exitCode: number = await new Promise((resolve) => second.on("exit", (code) => resolve(code ?? -1)));
+
+  assert.equal(exitCode, 1, "the second daemon refused to share the device");
+  assert.match(stderr, /holding the Codex Micro/);
+  assert.equal(fs.existsSync(path.join(otherDirectory, "other.sock")), false, "it never opened a socket");
+  assert.equal(sandbox.daemon.exitCode, null, "the original daemon is untouched");
+});
+
+test("a stale device lock from a dead daemon does not block startup", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-stalelock-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const lockPath = path.join(directory, "device.lock");
+  // A pid that cannot be running: recorded, then the process died.
+  fs.writeFileSync(lockPath, "999999\n");
+
+  const sandbox = await startSandboxDaemon({ CLAUDE_MICRO_DEVICE_LOCK: lockPath });
+  context.after(() => stopSandbox(sandbox));
+
+  assert.equal(sandbox.daemon.exitCode, null, "started despite the stale lock");
+  assert.equal(fs.readFileSync(lockPath, "utf8").trim(), String(sandbox.daemon.pid), "took ownership of the lock");
 });
 
 test("SIGTERM removes the socket so the next start is clean", async (context) => {
