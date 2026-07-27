@@ -35,10 +35,11 @@ function finish(error) {
   finished = true;
   clearTimeout(timeout);
   client.destroy();
-  if (error) {
-    console.error(`Claude Micro bridge unavailable: ${error.message}`);
-    process.exitCode = 1;
-  }
+  if (!error) return;
+  const code = error.code;
+  if (code === "ECONNREFUSED" || code === "ENOENT") process.exit(0);
+  console.error(`Claude Micro bridge unavailable: ${error.message}`);
+  process.exitCode = 1;
 }
 client.on("connect", () => client.end(body));
 client.setEncoding("utf8");

@@ -45,10 +45,16 @@ function finish(error?: Error): void {
   finished = true;
   clearTimeout(timeout);
   client.destroy();
-  if (error) {
-    console.error(`Claude Micro bridge unavailable: ${error.message}`);
-    process.exitCode = 1;
-  }
+  if (!error) return;
+  // A daemon killed by anything other than SIGINT/SIGTERM leaves its socket
+  // file behind, so the existsSync check above passes and we land here on
+  // every hook. That is the same "bridge is not running" state the check
+  // exists to keep quiet — and the tmux status badge already reports it
+  // actionably ("↻ k"), so an error per tool call adds noise, not signal.
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "ECONNREFUSED" || code === "ENOENT") process.exit(0);
+  console.error(`Claude Micro bridge unavailable: ${error.message}`);
+  process.exitCode = 1;
 }
 
 client.on("connect", () => client.end(body));
