@@ -25,4 +25,24 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run verify
-      - run: pnpm --filter codex-micro-protocol exec npm pack --dry-run
+      - name: Validate npm packaging (exports map, types, tarball)
+        working-directory: packages/protocol
+        run: |
+          npx --yes @arethetypeswrong/cli --pack .
+          npx --yes publint
+          npm pack --dry-run
+
+  security:
+    name: Trivy scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan repository (vulnerabilities, secrets, misconfigurations)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+          scanners: vuln,secret,misconfig

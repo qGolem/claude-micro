@@ -1,5 +1,9 @@
 # Claude Micro
 
+[![CI](https://github.com/qGolem/claude-micro/actions/workflows/ci.yml/badge.svg)](https://github.com/qGolem/claude-micro/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Node >= 20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](./package.json)
+
 macOS integration for the Work Louder / OpenAI Codex Micro, Claude Code, and
 tmux: six Claude sessions get live Agent-key lighting, a frosted key focuses
 the matching tmux pane, and the Micro controls drive the active pane.

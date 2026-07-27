@@ -59,6 +59,19 @@ describe("joystick", () => {
     expect(parseJoystickSample({})).toBeNull();
   });
 
+  test("joystickDirection rejects non-finite angles", () => {
+    expect(() => joystickDirection(Number.NaN)).toThrow(RangeError);
+    expect(() => joystickDirection(Number.POSITIVE_INFINITY)).toThrow(RangeError);
+  });
+
+  test("flick detector ignores malformed samples without latching", () => {
+    const detector = new JoystickFlickDetector();
+    expect(detector.update({ angle: Number.NaN, distance: 1 })).toBeNull();
+    expect(detector.update({ angle: 0, distance: Number.NaN })).toBeNull();
+    // A NaN sample must not have latched the detector.
+    expect(detector.update({ angle: 0, distance: 0.9 })).toBe("right");
+  });
+
   test("joystickDirection snaps quadrants clockwise from right", () => {
     expect(joystickDirection(0)).toBe("right");
     expect(joystickDirection(0.25)).toBe("down");

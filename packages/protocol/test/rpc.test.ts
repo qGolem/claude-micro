@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  MAX_PENDING_MESSAGE_BYTES,
   RequestIdSequence,
   RpcMessageStream,
   RpcMethod,
@@ -46,7 +47,9 @@ describe("parseRpcMessage", () => {
       type: "response",
       id: 901,
       result: { version: "v0.4.1" },
+      method: "sys.version",
     });
+    expect(parseRpcMessage(`{"id":7}`)).not.toHaveProperty("method");
     expect(parseRpcMessage(`{"unexpected":true}`)).toMatchObject({ type: "unknown" });
     expect(parseRpcMessage("not json")).toMatchObject({ type: "invalid", text: "not json" });
   });
@@ -80,10 +83,45 @@ describe("RpcMessageStream", () => {
     expect(stream.pendingText).toBe("");
   });
 
+  test("keeps per-instance decoder state: interleaved streams with split multi-byte UTF-8 do not corrupt each other", () => {
+    // "…" is three UTF-8 bytes; split them across two pushes on each stream,
+    // interleaving the streams. A shared TextDecoder would garble both.
+    const messageBytes = new TextEncoder().encode(`{"m":"v.oai.new","p":"…"}\n`);
+    const splitAt = messageBytes.indexOf(0xe2) + 1; // one byte into the ellipsis
+    const firstStream = new RpcMessageStream();
+    const secondStream = new RpcMessageStream();
+    expect(firstStream.pushPayload(messageBytes.subarray(0, splitAt))).toEqual([]);
+    expect(secondStream.pushPayload(messageBytes.subarray(0, splitAt))).toEqual([]);
+    const firstResult = firstStream.pushPayload(messageBytes.subarray(splitAt));
+    const secondResult = secondStream.pushPayload(messageBytes.subarray(splitAt));
+    expect(firstResult).toMatchObject([{ type: "event", params: "…" }]);
+    expect(secondResult).toMatchObject([{ type: "event", params: "…" }]);
+  });
+
   test("keeps a partial line buffered and reports it as pendingText", () => {
     const stream = new RpcMessageStream();
     expect(stream.pushText(`{"id":`)).toEqual([]);
     expect(stream.pendingText).toBe(`{"id":`);
     expect(stream.pushText(`3}\n`)).toMatchObject([{ type: "response", id: 3 }]);
+  });
+
+  test("caps an endless line instead of growing without bound", () => {
+    const stream = new RpcMessageStream();
+    const flood = "x".repeat(MAX_PENDING_MESSAGE_BYTES + 1);
+    const messages = stream.pushText(flood);
+    expect(messages).toMatchObject([{ type: "invalid" }]);
+    expect(stream.pendingText).toBe("");
+    // The stream keeps working after the drop.
+    expect(stream.pushText(`{"id":4}\n`)).toMatchObject([{ type: "response", id: 4 }]);
+  });
+
+  test("reset discards buffered text and partial UTF-8 state", () => {
+    const messageBytes = new TextEncoder().encode(`{"m":"v.oai.new","p":"…"}\n`);
+    const stream = new RpcMessageStream();
+    stream.pushPayload(messageBytes.subarray(0, messageBytes.indexOf(0xe2) + 1));
+    expect(stream.pendingText).not.toBe("");
+    stream.reset();
+    expect(stream.pendingText).toBe("");
+    expect(stream.pushPayload(messageBytes)).toMatchObject([{ type: "event", params: "…" }]);
   });
 });

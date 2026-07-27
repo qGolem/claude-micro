@@ -6,9 +6,9 @@
 import {
   LightingEffect,
   agentKeyStatusRequest,
+  assertAgentKeyIndex,
   encodeAgentKeyLighting,
   firmwareVersionRequest,
-  type AgentKeyIndex,
 } from "codex-micro-protocol";
 import { openCodexMicro, sendRequestAndAwaitResponse } from "./shared";
 
@@ -23,15 +23,16 @@ try {
     device,
     agentKeyStatusRequest({
       id: 902,
-      agentKeys: rainbowColors.map((color, agentKeyIndex) =>
-        encodeAgentKeyLighting({
-          agentKeyIndex: agentKeyIndex as AgentKeyIndex,
+      agentKeys: rainbowColors.map((color, agentKeyIndex) => {
+        assertAgentKeyIndex(agentKeyIndex);
+        return encodeAgentKeyLighting({
+          agentKeyIndex,
           color,
           brightness: 1,
           effect: LightingEffect.solid,
           speed: 0,
-        }),
-      ),
+        });
+      }),
     }),
   );
   console.log(JSON.stringify(lightingResponse?.raw ?? null));

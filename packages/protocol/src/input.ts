@@ -15,7 +15,8 @@
 // distance is 0 (center) to 1 (full deflection).
 
 import { RpcMethod, type RpcMessage } from "./rpc";
-import { AGENT_KEY_COUNT } from "./lighting";
+import { isJsonObject } from "./json";
+import type { AgentKeyIndex } from "./lighting";
 
 export const KeyActionCode = Object.freeze({
   release: 0,
@@ -26,31 +27,28 @@ export const KeyActionCode = Object.freeze({
 export type KeyActionCodeValue = (typeof KeyActionCode)[keyof typeof KeyActionCode];
 export type KeyActionName = keyof typeof KeyActionCode;
 
-export const AGENT_KEY_NAMES: readonly string[] = Object.freeze(
-  Array.from({ length: AGENT_KEY_COUNT }, (_unused, agentKeyIndex) => `AG0${agentKeyIndex}`),
-);
+export const AGENT_KEY_NAMES = Object.freeze(["AG00", "AG01", "AG02", "AG03", "AG04", "AG05"] as const);
 
-export const ACTION_KEY_NAMES: readonly string[] = Object.freeze([
-  "ACT06",
-  "ACT07",
-  "ACT08",
-  "ACT09",
-  "ACT10",
-  "ACT11",
-  "ACT12",
-]);
+export const ACTION_KEY_NAMES = Object.freeze(["ACT06", "ACT07", "ACT08", "ACT09", "ACT10", "ACT11", "ACT12"] as const);
 
 export const ENCODER_KEY_NAMES = Object.freeze({
   clockwise: "ENC_CW",
   counterClockwise: "ENC_CC",
 } as const);
 
+export type AgentKeyName = (typeof AGENT_KEY_NAMES)[number];
+export type ActionKeyName = (typeof ACTION_KEY_NAMES)[number];
+export type EncoderKeyName = (typeof ENCODER_KEY_NAMES)[keyof typeof ENCODER_KEY_NAMES];
+/** Every key name current firmware is known to report. */
+export type KnownKeyName = AgentKeyName | ActionKeyName | EncoderKeyName;
+
 export interface ParsedKeyEvent {
-  keyName: string;
+  /** Known names autocomplete; future firmware names still typecheck. */
+  keyName: KnownKeyName | (string & {});
   action: KeyActionName;
   actionCode: KeyActionCodeValue;
   /** Set only for AG00-AG05; null for action keys and the encoder. */
-  agentKeyIndex: number | null;
+  agentKeyIndex: AgentKeyIndex | null;
 }
 
 export interface JoystickSample {
@@ -67,13 +65,11 @@ export type DeviceEvent =
   | ({ kind: "joystickSample" } & JoystickSample)
   | { kind: "unrecognized"; method: string; params: unknown };
 
-const AGENT_KEY_NAME_PATTERN = /^AG0([0-5])$/;
-
 /** Maps an agent-key name (AG00-AG05) to its index 0-5, or null. */
-export function agentKeyIndexForName(keyName: unknown): number | null {
+export function agentKeyIndexForName(keyName: unknown): AgentKeyIndex | null {
   if (typeof keyName !== "string") return null;
-  const match = AGENT_KEY_NAME_PATTERN.exec(keyName);
-  return match ? Number(match[1]) : null;
+  const index = (AGENT_KEY_NAMES as readonly string[]).indexOf(keyName);
+  return index >= 0 ? (index as AgentKeyIndex) : null;
 }
 
 const ACTION_NAME_BY_CODE: ReadonlyMap<number, KeyActionName> = new Map(
@@ -81,10 +77,6 @@ const ACTION_NAME_BY_CODE: ReadonlyMap<number, KeyActionName> = new Map(
     ([actionName, actionCode]) => [actionCode, actionName],
   ),
 );
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 /**
  * Parses the params of an RpcMethod.keyEvent message. Returns null when the
@@ -121,6 +113,7 @@ export const JOYSTICK_DIRECTIONS: readonly JoystickDirection[] = Object.freeze([
 
 /** Snaps a joystick angle (0-1, clockwise from right) to the nearest cardinal direction. */
 export function joystickDirection(angle: number): JoystickDirection {
+  if (!Number.isFinite(angle)) throw new RangeError("angle must be a finite number.");
   const normalizedAngle = ((angle % 1) + 1) % 1;
   return JOYSTICK_DIRECTIONS[Math.round(normalizedAngle * 4) % 4] as JoystickDirection;
 }
@@ -150,9 +143,9 @@ export class JoystickFlickDetector {
     this.#rearmDistance = rearmDistance;
   }
 
-  /** Feed one sample; returns a direction or null. */
+  /** Feed one sample; returns a direction or null. Malformed samples are ignored. */
   update(sample: JoystickSample | null | undefined): JoystickDirection | null {
-    if (!sample) return null;
+    if (!sample || !Number.isFinite(sample.angle) || !Number.isFinite(sample.distance)) return null;
     if (sample.distance < this.#rearmDistance) {
       this.#latched = false;
       return null;

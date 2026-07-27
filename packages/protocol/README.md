@@ -1,5 +1,11 @@
 # codex-micro-protocol
 
+[![CI](https://github.com/qGolem/claude-micro/actions/workflows/ci.yml/badge.svg)](https://github.com/qGolem/claude-micro/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Types: included](https://img.shields.io/badge/types-included-3178c6.svg)](./src/index.ts)
+[![Runtime: agnostic](https://img.shields.io/badge/runtime-node%20%7C%20bun%20%7C%20deno%20%7C%20browser-brightgreen.svg)](#)
+[![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](./package.json)
+
 Pure, dependency-free TypeScript codec for the Work Louder **Codex Micro**
 vendor HID RPC protocol. It encodes requests into writable HID packets and
 decodes the device's report stream into typed events — nothing else. No
@@ -10,6 +16,33 @@ WebHID, …) and build your own abstractions on top.
 
 Everything documented here was discovered by observing the device; it is not
 an official Work Louder specification.
+
+## Install
+
+From npm (once published):
+
+```sh
+npm install codex-micro-protocol     # or: pnpm add / bun add / yarn add
+```
+
+Vendoring without the registry, from a checkout of this repository:
+
+```sh
+# as a tarball — dist + src + types, ~25 kB
+cd packages/protocol && pnpm run build && npm pack
+npm install /path/to/codex-micro-protocol-<version>.tgz
+
+# or as a workspace/file dependency
+"codex-micro-protocol": "file:../claude-micro/packages/protocol"
+```
+
+The package ships prebuilt ESM (`import`), CJS (`require`), and `.d.ts`
+declarations; `src/` is included so you can also vendor the six source files
+directly into your tree (MIT licensed).
+
+New here? Read the **[tutorial](./TUTORIAL.md)** — it builds a working
+integration step by step and shows how the production bridge in this
+repository layers its abstractions on top of the codec.
 
 ## Wire protocol
 

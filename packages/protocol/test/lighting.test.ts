@@ -63,6 +63,13 @@ describe("agentKeyStatusParams", () => {
     expect(agentKeyStatusParams([idleEntry(3)])).toHaveLength(1);
   });
 
+  test("returns a copy so later mutation of the input cannot bypass validation", () => {
+    const entries = [idleEntry(0)];
+    const validated = agentKeyStatusParams(entries);
+    expect(validated).not.toBe(entries);
+    expect(validated).toEqual(entries);
+  });
+
   test("rejects empty, oversized, and duplicate-key updates", () => {
     expect(() => agentKeyStatusParams([])).toThrow(RangeError);
     expect(() => agentKeyStatusParams(([0, 1, 2, 3, 4, 5, 5] as const).map(idleEntry))).toThrow(RangeError);

@@ -98,12 +98,18 @@ function assertUnitInterval(value: number, fieldName: string): void {
 
 function assertLightingEffect(effect: number): void {
   if (!LIGHTING_EFFECT_VALUES.has(effect)) {
-    throw new RangeError(`effect must be one of LightingEffect (0-${LIGHTING_EFFECT_VALUES.size - 1}).`);
+    throw new RangeError(`effect must be one of LightingEffect (${[...LIGHTING_EFFECT_VALUES].join(", ")}).`);
   }
 }
 
-export function assertAgentKeyIndex(agentKeyIndex: number): void {
-  if (!Number.isInteger(agentKeyIndex) || agentKeyIndex < 0 || agentKeyIndex >= AGENT_KEY_COUNT) {
+/** Type guard for the 0-5 agent-key range. */
+export function isAgentKeyIndex(value: number): value is AgentKeyIndex {
+  return Number.isInteger(value) && value >= 0 && value < AGENT_KEY_COUNT;
+}
+
+/** Throwing variant of isAgentKeyIndex; narrows on success. */
+export function assertAgentKeyIndex(agentKeyIndex: number): asserts agentKeyIndex is AgentKeyIndex {
+  if (!isAgentKeyIndex(agentKeyIndex)) {
     throw new RangeError(`agentKeyIndex must be an integer between 0 and ${AGENT_KEY_COUNT - 1}.`);
   }
 }
@@ -148,7 +154,9 @@ export function agentKeyStatusParams(encodedEntries: AgentKeyLightingWire[]): Ag
     if (seenIndexes.has(entry.id)) throw new RangeError(`agent key ${entry.id} appears more than once.`);
     seenIndexes.add(entry.id);
   }
-  return encodedEntries;
+  // Return a copy so post-validation mutation of the caller's array cannot
+  // bypass the checks (mirrors lightingConfigParams building a fresh object).
+  return [...encodedEntries];
 }
 
 /**

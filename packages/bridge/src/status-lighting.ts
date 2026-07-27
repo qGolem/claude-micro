@@ -4,8 +4,8 @@
 
 import {
   LightingEffect,
+  assertAgentKeyIndex,
   encodeAgentKeyLighting,
-  type AgentKeyIndex,
   type AgentKeyLightingWire,
   type LightingEffectValue,
 } from "codex-micro-protocol";
@@ -37,6 +37,7 @@ export interface SyncOptions {
  * index is runtime-validated by the codec.
  */
 export function agentKeyLightingForState(agentKeyIndex: number, stateName: string, syncOptions: SyncOptions = {}): AgentKeyLightingWire {
+  assertAgentKeyIndex(agentKeyIndex);
   const style = AGENT_STATE_STYLES[stateName as SessionState] ?? AGENT_STATE_STYLES.idle;
-  return encodeAgentKeyLighting({ agentKeyIndex: agentKeyIndex as AgentKeyIndex, ...style, ...syncOptions });
+  return encodeAgentKeyLighting({ agentKeyIndex, ...style, ...syncOptions });
 }

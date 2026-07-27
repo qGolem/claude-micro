@@ -11,6 +11,7 @@
 // Note the asymmetry: the host sends full key names, the device abbreviates.
 
 import { rpcPayloadFromPacket } from "./framing";
+import { isJsonObject } from "./json";
 
 /** Every RPC method name the Codex Micro firmware is known to speak. */
 export const RpcMethod = Object.freeze({
@@ -28,8 +29,14 @@ export const RpcMethod = Object.freeze({
 
 export type RpcMethodName = (typeof RpcMethod)[keyof typeof RpcMethod];
 
+/**
+ * Known method names autocomplete; unknown firmware methods remain valid.
+ * (`string & {}` keeps the literals visible to the language service.)
+ */
+export type RpcMethodInput = RpcMethodName | (string & {});
+
 export interface RpcRequest {
-  method: string;
+  method: RpcMethodInput;
   params?: unknown;
   id: number;
 }
@@ -37,7 +44,7 @@ export interface RpcRequest {
 /** A spontaneous device event ("m"/"p" wire shape). */
 export interface RpcEventMessage {
   type: "event";
-  method: string;
+  method: RpcMethodInput;
   params: unknown;
   raw: Record<string, unknown>;
 }
@@ -47,6 +54,8 @@ export interface RpcResponseMessage {
   type: "response";
   id: number;
   result: unknown;
+  /** Echoed by the firmware on observed versions; absent on some replies. */
+  method?: string;
   raw: Record<string, unknown>;
 }
 
@@ -65,7 +74,6 @@ export interface RpcInvalidMessage {
 export type RpcMessage = RpcEventMessage | RpcResponseMessage | RpcUnknownMessage | RpcInvalidMessage;
 
 const utf8Encoder = new TextEncoder();
-const utf8Decoder = new TextDecoder();
 
 /** Cycles request ids through 1-999 so requests stay short on the wire. */
 export class RequestIdSequence {
@@ -80,7 +88,8 @@ export class RequestIdSequence {
 
 /**
  * Encodes one request as newline-terminated JSON bytes. `params` defaults to
- * null; `id` must be a non-negative integer (use RequestIdSequence).
+ * null; `id` must be a non-negative integer. RequestIdSequence issues 1-999;
+ * the encoder additionally accepts 0 for callers managing ids themselves.
  */
 export function encodeRpcRequest({ method, params = null, id }: RpcRequest): Uint8Array {
   if (typeof method !== "string" || method.length === 0) {
@@ -90,10 +99,6 @@ export function encodeRpcRequest({ method, params = null, id }: RpcRequest): Uin
     throw new TypeError("encodeRpcRequest requires a non-negative integer id.");
   }
   return utf8Encoder.encode(`${JSON.stringify({ method, params, id })}\n`);
-}
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -111,10 +116,19 @@ export function parseRpcMessage(messageText: string): RpcMessage {
     return { type: "event", method: parsed.m, params: parsed.p, raw: parsed };
   }
   if (isJsonObject(parsed) && Number.isInteger(parsed.id)) {
-    return { type: "response", id: parsed.id as number, result: parsed.result, raw: parsed };
+    const response: RpcResponseMessage = { type: "response", id: parsed.id as number, result: parsed.result, raw: parsed };
+    if (typeof parsed.method === "string") response.method = parsed.method;
+    return response;
   }
   return { type: "unknown", raw: parsed };
 }
+
+/**
+ * The device stream is untrusted input: a peer that never sends a newline
+ * must not grow host memory without bound. Real messages are well under 1 KB;
+ * anything past this cap is surfaced as one invalid message and dropped.
+ */
+export const MAX_PENDING_MESSAGE_BYTES = 65_536;
 
 /**
  * Incremental decoder for the device → host stream. Feed it raw HID reports
@@ -123,6 +137,9 @@ export function parseRpcMessage(messageText: string): RpcMessage {
  */
 export class RpcMessageStream {
   #pendingText = "";
+  // Streaming decode holds partial multi-byte sequences between pushes, so
+  // the decoder must be per-instance state, never shared.
+  #utf8Decoder = new TextDecoder();
 
   /** Feed one raw 64-byte HID report. Non-RPC reports are ignored. */
   pushHidPacket(packetBytes: Uint8Array): RpcMessage[] {
@@ -133,7 +150,7 @@ export class RpcMessageStream {
 
   /** Feed deframed payload bytes (a chunk of the UTF-8 message stream). */
   pushPayload(payloadBytes: Uint8Array): RpcMessage[] {
-    return this.pushText(utf8Decoder.decode(payloadBytes, { stream: true }));
+    return this.pushText(this.#utf8Decoder.decode(payloadBytes, { stream: true }));
   }
 
   /** Feed decoded text directly. */
@@ -141,11 +158,25 @@ export class RpcMessageStream {
     this.#pendingText += text;
     const lines = this.#pendingText.split(/\r?\n/);
     this.#pendingText = lines.pop() ?? "";
-    return lines.filter((line) => line.length > 0).map(parseRpcMessage);
+    const messages = lines.filter((line) => line.length > 0).map(parseRpcMessage);
+    if (this.#pendingText.length > MAX_PENDING_MESSAGE_BYTES) {
+      messages.push({ type: "invalid", text: this.#pendingText.slice(0, 1_024) });
+      this.#pendingText = "";
+    }
+    return messages;
   }
 
   /** Text received after the last complete message (useful for diagnostics). */
   get pendingText(): string {
     return this.#pendingText;
+  }
+
+  /**
+   * Discards buffered text and partial UTF-8 state. Call after a device
+   * disconnect/reconnect — the buffer is connection state.
+   */
+  reset(): void {
+    this.#pendingText = "";
+    this.#utf8Decoder = new TextDecoder();
   }
 }

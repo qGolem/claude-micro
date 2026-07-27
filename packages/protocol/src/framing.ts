@@ -62,10 +62,12 @@ export function decodeHidPacket(packetBytes: Uint8Array): DecodedHidPacket | nul
 
 /**
  * Convenience: the RPC payload of a received report, or null when the report
- * is not an RPC packet or carries no payload.
+ * does not carry the vendor report ID, is not on the RPC channel, or has no
+ * payload.
  */
 export function rpcPayloadFromPacket(packetBytes: Uint8Array): Uint8Array | null {
   const decoded = decodeHidPacket(packetBytes);
-  if (!decoded || decoded.channel !== RPC_CHANNEL || decoded.payload.length === 0) return null;
+  if (!decoded || decoded.reportId !== HID_REPORT_ID || decoded.channel !== RPC_CHANNEL) return null;
+  if (decoded.payload.length === 0) return null;
   return decoded.payload;
 }

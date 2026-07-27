@@ -2,6 +2,19 @@
   "name": "codex-micro-protocol",
   "version": "0.2.0",
   "description": "Pure, dependency-free codec for the Work Louder Codex Micro vendor HID RPC protocol: framing, RPC envelopes, lighting payloads, and input-event parsing.",
+  "license": "MIT",
+  "author": {
+    "name": "qGolem"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qGolem/claude-micro.git",
+    "directory": "packages/protocol"
+  },
+  "homepage": "https://github.com/qGolem/claude-micro/tree/main/packages/protocol#readme",
+  "bugs": {
+    "url": "https://github.com/qGolem/claude-micro/issues"
+  },
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.cjs",
@@ -9,15 +22,23 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
     "src",
-    "README.md"
+    "README.md",
+    "TUTORIAL.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"
@@ -25,12 +46,15 @@
   "scripts": {
     "build": "tsup",
     "check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "prepublishOnly": "pnpm run check && bun test && pnpm run build"
   },
   "keywords": [
     "codex-micro",
     "work-louder",
     "hid",
+    "webhid",
+    "macropad",
     "protocol",
     "codec",
     "typescript"

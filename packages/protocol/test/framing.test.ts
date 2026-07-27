@@ -57,7 +57,8 @@ describe("decodeHidPacket", () => {
 });
 
 describe("rpcPayloadFromPacket", () => {
-  test("returns null for other channels and empty payloads", () => {
+  test("returns null for other report IDs, other channels, and empty payloads", () => {
+    expect(rpcPayloadFromPacket(new Uint8Array([5, RPC_CHANNEL, 2, 65, 66]))).toBeNull();
     expect(rpcPayloadFromPacket(new Uint8Array([HID_REPORT_ID, 1, 2, 65, 66]))).toBeNull();
     expect(rpcPayloadFromPacket(new Uint8Array([HID_REPORT_ID, RPC_CHANNEL, 0, 0]))).toBeNull();
   });
