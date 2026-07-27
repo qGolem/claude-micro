@@ -11,12 +11,12 @@ import {
   parseJoystickSample,
   parseKeyEvent,
   parseRpcMessage,
-} from "../src/index.mjs";
+} from "../src/index";
 
 describe("key name tables", () => {
   test("cover all six agent keys and seven action keys", () => {
-    expect(AGENT_KEY_NAMES).toEqual(["AG00", "AG01", "AG02", "AG03", "AG04", "AG05"]);
-    expect(ACTION_KEY_NAMES).toEqual(["ACT06", "ACT07", "ACT08", "ACT09", "ACT10", "ACT11", "ACT12"]);
+    expect([...AGENT_KEY_NAMES]).toEqual(["AG00", "AG01", "AG02", "AG03", "AG04", "AG05"]);
+    expect([...ACTION_KEY_NAMES]).toEqual(["ACT06", "ACT07", "ACT08", "ACT09", "ACT10", "ACT11", "ACT12"]);
   });
 
   test("agentKeyIndexForName maps names to indexes and rejects everything else", () => {

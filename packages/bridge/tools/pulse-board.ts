@@ -1,11 +1,11 @@
 // Diagnostic: cycle the whole board (typing keys + ambient underglow) through
 // six breathing colors, two seconds each.
 //
-//   node tools/pulse-board.mjs
+//   node dist/tools/pulse-board.js
 
 import { setTimeout as delay } from "node:timers/promises";
 import { LightingEffect, encodeLightingChannel, lightingConfigRequest } from "codex-micro-protocol";
-import { openCodexMicro, sendRequestAndAwaitResponse } from "./shared.mjs";
+import { openCodexMicro, sendRequestAndAwaitResponse } from "./shared";
 
 const device = await openCodexMicro();
 const namedColors = {

@@ -12,7 +12,7 @@ is_bridge_pid() {
   kill -0 "$pid" 2>/dev/null || return 1
   local command
   command="$(ps -p "$pid" -o command= 2>/dev/null)"
-  [[ "$command" == *"$root/src/daemon.mjs"* ]]
+  [[ "$command" == *"$root/dist/daemon.js"* ]]
 }
 
 if [[ -f "$pid_file" ]]; then

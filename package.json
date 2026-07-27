@@ -8,11 +8,13 @@
     "node": ">=20"
   },
   "scripts": {
+    "build": "pnpm --recursive run build",
     "check": "bash -n claude-micro.tmux && pnpm --recursive run check",
     "test": "pnpm --recursive run test",
-    "verify": "pnpm run check && pnpm run test",
-    "doctor": "node packages/bridge/src/doctor.mjs",
-    "start": "node packages/bridge/src/daemon.mjs",
-    "cleanup-legacy": "node packages/bridge/src/cleanup-legacy.mjs"
+    "verify": "pnpm run build && pnpm run check && pnpm run test",
+    "prepare": "pnpm --recursive run build",
+    "doctor": "node packages/bridge/dist/doctor.js",
+    "start": "node packages/bridge/dist/daemon.js",
+    "cleanup-legacy": "node packages/bridge/dist/cleanup-legacy.js"
   }
 }

@@ -5,7 +5,7 @@ const slot = Number.parseInt(process.argv[2] ?? "", 10);
 if (!Number.isInteger(slot) || slot < 0 || slot > 5) throw new Error("Pass an Agent slot from 0 through 5.");
 
 const slotsPath = process.env.CLAUDE_MICRO_SLOTS ?? "/private/tmp/claude-micro-slots.json";
-const data = JSON.parse(fs.readFileSync(slotsPath, "utf8"));
+const data = JSON.parse(fs.readFileSync(slotsPath, "utf8")) as { slots?: Array<{ tmuxPane?: string | null }> };
 const pane = data.slots?.[slot]?.tmuxPane;
 if (!pane) {
   execFileSync("tmux", ["display-message", `Claude Micro: Agent Key ${slot + 1} has no tmux pane yet.`]);

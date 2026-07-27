@@ -2,7 +2,7 @@
 // re-sending continuously so the running bridge's own refresh loop cannot
 // immediately overwrite it.
 //
-//   node tools/force-agent-key.mjs [rrggbb]
+//   node dist/tools/force-agent-key.js [rrggbb]
 
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -11,7 +11,7 @@ import {
   encodeAgentKeyLighting,
   encodeRequestPackets,
 } from "codex-micro-protocol";
-import { openCodexMicro } from "./shared.mjs";
+import { openCodexMicro } from "./shared";
 
 const color = Number.parseInt(process.argv[2] ?? "0066ff", 16);
 if (!Number.isInteger(color) || color < 0 || color > 0xffffff) {

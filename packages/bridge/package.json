@@ -8,15 +8,22 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node src/daemon.mjs",
-    "event": "node src/event.mjs",
-    "doctor": "node src/doctor.mjs",
-    "cleanup-legacy": "node src/cleanup-legacy.mjs",
-    "check": "for source in src/*.mjs tools/*.mjs; do node --check \"$source\" || exit 1; done && zsh -n src/tmux-start-bridge.sh && zsh -n src/tmux-stop-bridge.sh && zsh -n src/tmux-reset-bridge.sh",
-    "test": "node --test"
+    "build": "tsup",
+    "start": "node dist/daemon.js",
+    "event": "node dist/event.js",
+    "doctor": "node dist/doctor.js",
+    "cleanup-legacy": "node dist/cleanup-legacy.js",
+    "check": "tsc --noEmit && zsh -n src/tmux-start-bridge.sh && zsh -n src/tmux-stop-bridge.sh && zsh -n src/tmux-reset-bridge.sh",
+    "test": "pnpm run build && node --import tsx --test test/bridge.test.ts test/lifecycle.test.ts test/plugin.test.ts"
   },
   "dependencies": {
     "codex-micro-protocol": "workspace:*",
     "node-hid": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   }
 }

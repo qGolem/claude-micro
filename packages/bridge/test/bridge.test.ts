@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LightingEffect } from "codex-micro-protocol";
-import { SessionSlots, stateForHook } from "../src/state.mjs";
-import { AGENT_STATE_STYLES, agentKeyLightingForState } from "../src/status-lighting.mjs";
+import { SessionSlots, stateForHook } from "../src/state";
+import { AGENT_STATE_STYLES, agentKeyLightingForState } from "../src/status-lighting";
 
 test("maps Claude Code lifecycle events to status colors", () => {
   assert.equal(stateForHook({ hook_event_name: "PreToolUse" }), "working");
@@ -17,7 +17,7 @@ test("builds valid wire lighting for every session state", () => {
     const wireEntry = agentKeyLightingForState(1, stateName);
     assert.equal(wireEntry.id, 1);
     assert.ok(Number.isInteger(wireEntry.c));
-    assert.ok(Object.values(LightingEffect).includes(wireEntry.e));
+    assert.ok(Object.values(LightingEffect).includes(wireEntry.e as 0 | 1 | 2 | 3 | 4 | 5 | 6));
   }
   assert.equal(agentKeyLightingForState(0, "working").e, LightingEffect.shallowBreath);
 });

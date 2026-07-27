@@ -6,7 +6,7 @@ import {
   encodeHidPackets,
   encodeRpcRequest,
   parseRpcMessage,
-} from "../src/index.mjs";
+} from "../src/index";
 
 describe("encodeRpcRequest", () => {
   test("emits newline-terminated JSON with method, params, id", () => {
@@ -62,7 +62,7 @@ describe("RpcMessageStream", () => {
     const stream = new RpcMessageStream();
     const earlyMessages = packets.slice(0, -1).flatMap((packet) => stream.pushHidPacket(packet));
     expect(earlyMessages).toEqual([]);
-    const finalMessages = stream.pushHidPacket(packets.at(-1));
+    const finalMessages = stream.pushHidPacket(packets.at(-1)!);
     expect(finalMessages).toHaveLength(1);
     expect(finalMessages[0]).toMatchObject({ type: "event", method: "v.oai.hid" });
     expect(stream.pendingText).toBe("");

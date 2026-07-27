@@ -1,11 +1,12 @@
 # codex-micro-protocol
 
-Pure, dependency-free codec for the Work Louder **Codex Micro** vendor HID RPC
-protocol. It encodes requests into writable HID packets and decodes the
-device's report stream into typed events — nothing else. No device I/O, no
-Node-only APIs (`Uint8Array` + `TextEncoder` throughout), so it runs under
-Node, Bun, Deno, or a browser with WebHID. Bring your own transport
-(node-hid, WebHID, …) and build your own abstractions on top.
+Pure, dependency-free TypeScript codec for the Work Louder **Codex Micro**
+vendor HID RPC protocol. It encodes requests into writable HID packets and
+decodes the device's report stream into typed events — nothing else. No
+device I/O, no Node-only APIs (`Uint8Array` + `TextEncoder` throughout), so
+it runs under Node, Bun, Deno, or a browser with WebHID. Ships ESM + CJS +
+type declarations (built with tsup). Bring your own transport (node-hid,
+WebHID, …) and build your own abstractions on top.
 
 Everything documented here was discovered by observing the device; it is not
 an official Work Louder specification.
@@ -104,12 +105,12 @@ const direction = flickDetector.update(deviceEvent); // "up" | "down" | "left" |
 
 | Module | Contents |
 | --- | --- |
-| `device.mjs` | USB identity constants, `isCodexMicroInterface` |
-| `framing.mjs` | packet constants, `encodeHidPackets`, `decodeHidPacket`, `rpcPayloadFromPacket` |
-| `rpc.mjs` | `RpcMethod`, `RequestIdSequence`, `encodeRpcRequest`, `parseRpcMessage`, `RpcMessageStream` |
-| `lighting.mjs` | `LightingEffect`, agent-key and whole-board payload builders (validated) |
-| `input.mjs` | key-name tables, `parseKeyEvent`, joystick parsing, `JoystickFlickDetector`, `parseDeviceEvent` |
-| `requests.mjs` | request builders + `encodeRequestPackets` |
+| `device.ts` | USB identity constants, `isCodexMicroInterface` |
+| `framing.ts` | packet constants, `encodeHidPackets`, `decodeHidPacket`, `rpcPayloadFromPacket` |
+| `rpc.ts` | `RpcMethod`, `RequestIdSequence`, `encodeRpcRequest`, `parseRpcMessage`, `RpcMessageStream`, the `RpcMessage` union |
+| `lighting.ts` | `LightingEffect`, agent-key and whole-board payload builders (validated), wire types |
+| `input.ts` | key-name tables, `parseKeyEvent`, joystick parsing, `JoystickFlickDetector`, the `DeviceEvent` union |
+| `requests.ts` | request builders + `encodeRequestPackets` |
 
 Unknown methods parse as `{kind: "unrecognized"}` rather than throwing, so
 firmware additions never break a consumer.
@@ -117,5 +118,8 @@ firmware additions never break a consumer.
 ## Development
 
 ```sh
-bun test
+bun test          # tests (Bun runs the TypeScript directly)
+pnpm run check    # tsc --noEmit
+pnpm run build    # tsup → dist/ (ESM + CJS + d.ts)
+npm pack          # tarball for publishing/vendoring
 ```

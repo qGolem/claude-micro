@@ -7,17 +7,17 @@ import {
   decodeHidPacket,
   encodeHidPackets,
   rpcPayloadFromPacket,
-} from "../src/index.mjs";
+} from "../src/index";
 
 describe("encodeHidPackets", () => {
   test("frames a short message into one 64-byte packet", () => {
     const message = new TextEncoder().encode("hello\n");
     const packets = encodeHidPackets(message);
     expect(packets).toHaveLength(1);
-    expect(packets[0].length).toBe(HID_PACKET_LENGTH);
-    expect(packets[0][0]).toBe(HID_REPORT_ID);
-    expect(packets[0][1]).toBe(RPC_CHANNEL);
-    expect(packets[0][2]).toBe(message.length);
+    expect(packets[0]!.length).toBe(HID_PACKET_LENGTH);
+    expect(packets[0]![0]).toBe(HID_REPORT_ID);
+    expect(packets[0]![1]).toBe(RPC_CHANNEL);
+    expect(packets[0]![2]).toBe(message.length);
   });
 
   test("splits long messages into 61-byte chunks", () => {
@@ -30,12 +30,13 @@ describe("encodeHidPackets", () => {
   });
 
   test("rejects non-Uint8Array input", () => {
+    // @ts-expect-error deliberately violating the signature to test the runtime guard
     expect(() => encodeHidPackets("text")).toThrow(TypeError);
   });
 
   test("round-trips through decodeHidPacket", () => {
     const message = new TextEncoder().encode(`{"method":"sys.version","params":null,"id":1}\n`.repeat(3));
-    const reassembled = encodeHidPackets(message).flatMap((packet) => [...decodeHidPacket(packet).payload]);
+    const reassembled = encodeHidPackets(message).flatMap((packet) => [...decodeHidPacket(packet)!.payload]);
     expect(new Uint8Array(reassembled)).toEqual(message);
   });
 });
@@ -47,7 +48,7 @@ describe("decodeHidPacket", () => {
 
   test("clamps a lying length byte to the available bytes", () => {
     const packet = new Uint8Array([HID_REPORT_ID, RPC_CHANNEL, 200, 65, 66]);
-    expect(decodeHidPacket(packet).payload).toEqual(new Uint8Array([65, 66]));
+    expect(decodeHidPacket(packet)!.payload).toEqual(new Uint8Array([65, 66]));
   });
 
   test("payload capacity constant matches the framing", () => {
@@ -63,6 +64,6 @@ describe("rpcPayloadFromPacket", () => {
 
   test("returns the payload view for RPC packets", () => {
     const payload = rpcPayloadFromPacket(new Uint8Array([HID_REPORT_ID, RPC_CHANNEL, 2, 65, 66, 0]));
-    expect([...payload]).toEqual([65, 66]);
+    expect([...payload!]).toEqual([65, 66]);
   });
 });

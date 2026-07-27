@@ -14,15 +14,22 @@ export const HID_PACKET_LENGTH = 64;
 export const HID_PACKET_HEADER_LENGTH = 3;
 export const HID_PACKET_PAYLOAD_CAPACITY = HID_PACKET_LENGTH - HID_PACKET_HEADER_LENGTH;
 
+export interface DecodedHidPacket {
+  reportId: number;
+  channel: number;
+  /** A view into the input packet, not a copy. */
+  payload: Uint8Array;
+}
+
 /**
  * Splits an encoded message into 64-byte HID packets ready to write to the
  * device. Accepts any Uint8Array (including Node Buffers).
  */
-export function encodeHidPackets(messageBytes) {
+export function encodeHidPackets(messageBytes: Uint8Array): Uint8Array[] {
   if (!(messageBytes instanceof Uint8Array)) {
     throw new TypeError("encodeHidPackets expects the message as a Uint8Array.");
   }
-  const packets = [];
+  const packets: Uint8Array[] = [];
   for (let messageOffset = 0; messageOffset < messageBytes.length; messageOffset += HID_PACKET_PAYLOAD_CAPACITY) {
     const chunk = messageBytes.subarray(messageOffset, messageOffset + HID_PACKET_PAYLOAD_CAPACITY);
     const packet = new Uint8Array(HID_PACKET_LENGTH);
@@ -37,10 +44,9 @@ export function encodeHidPackets(messageBytes) {
 
 /**
  * Decodes one received HID report into its header fields and payload view.
- * Returns null for reports too short to carry the framing header. The payload
- * is a view into the input packet, not a copy.
+ * Returns null for reports too short to carry the framing header.
  */
-export function decodeHidPacket(packetBytes) {
+export function decodeHidPacket(packetBytes: Uint8Array): DecodedHidPacket | null {
   if (!(packetBytes instanceof Uint8Array) || packetBytes.length < HID_PACKET_HEADER_LENGTH) return null;
   const declaredLength = packetBytes[2];
   const availableLength = packetBytes.length - HID_PACKET_HEADER_LENGTH;
@@ -58,7 +64,7 @@ export function decodeHidPacket(packetBytes) {
  * Convenience: the RPC payload of a received report, or null when the report
  * is not an RPC packet or carries no payload.
  */
-export function rpcPayloadFromPacket(packetBytes) {
+export function rpcPayloadFromPacket(packetBytes: Uint8Array): Uint8Array | null {
   const decoded = decodeHidPacket(packetBytes);
   if (!decoded || decoded.channel !== RPC_CHANNEL || decoded.payload.length === 0) return null;
   return decoded.payload;

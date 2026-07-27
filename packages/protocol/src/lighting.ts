@@ -22,31 +22,87 @@ export const LightingEffect = Object.freeze({
   breath: 4,
   gradient: 5,
   shallowBreath: 6,
-});
+} as const);
+
+export type LightingEffectValue = (typeof LightingEffect)[keyof typeof LightingEffect];
 
 export const AGENT_KEY_COUNT = 6;
 
-const LIGHTING_EFFECT_VALUES = new Set(Object.values(LightingEffect));
+export type AgentKeyIndex = 0 | 1 | 2 | 3 | 4 | 5;
 
-function assertRgbColor(color, fieldName) {
+export interface AgentKeyLightingOptions {
+  agentKeyIndex: AgentKeyIndex;
+  /** RGB color, 0xRRGGBB. */
+  color: number;
+  /** 0-1. */
+  brightness: number;
+  effect: LightingEffectValue;
+  /** Effect speed, 0-1. */
+  speed: number;
+  /** Mirror this key's style onto the typing keys. */
+  syncKeysLighting?: boolean;
+  /** Mirror this key's style onto the ambient/underglow. */
+  syncAmbientLighting?: boolean;
+}
+
+/** One entry of an RpcMethod.agentKeyStatus params array, as sent on the wire. */
+export interface AgentKeyLightingWire {
+  id: number;
+  c: number;
+  b: number;
+  e: number;
+  s: number;
+  sk?: 0 | 1;
+  sa?: 0 | 1;
+}
+
+export interface LightingChannelOptions {
+  /** RGB color, 0xRRGGBB. */
+  color: number;
+  /** 0-1. */
+  brightness: number;
+  effect: LightingEffectValue;
+  /** Effect speed, 0-1. */
+  speed: number;
+  /** Firmware lighting mode; only 0 has been observed. */
+  mode?: number;
+}
+
+/** One channel of an RpcMethod.lightingConfig params object, as sent on the wire. */
+export interface LightingChannelWire {
+  c: number;
+  b: number;
+  e: number;
+  s: number;
+  m: number;
+}
+
+export interface LightingConfigWire {
+  keys?: LightingChannelWire;
+  ambient?: LightingChannelWire;
+}
+
+const LIGHTING_EFFECT_VALUES = new Set<number>(Object.values(LightingEffect));
+
+function assertRgbColor(color: number, fieldName: string): void {
   if (!Number.isInteger(color) || color < 0 || color > 0xffffff) {
     throw new RangeError(`${fieldName} must be an integer RGB color between 0x000000 and 0xffffff.`);
   }
 }
 
-function assertUnitInterval(value, fieldName) {
+function assertUnitInterval(value: number, fieldName: string): void {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
     throw new RangeError(`${fieldName} must be a number between 0 and 1.`);
   }
 }
 
-function assertLightingEffect(effect) {
+function assertLightingEffect(effect: number): void {
   if (!LIGHTING_EFFECT_VALUES.has(effect)) {
     throw new RangeError(`effect must be one of LightingEffect (0-${LIGHTING_EFFECT_VALUES.size - 1}).`);
   }
 }
 
-export function assertAgentKeyIndex(agentKeyIndex) {
+export function assertAgentKeyIndex(agentKeyIndex: number): void {
   if (!Number.isInteger(agentKeyIndex) || agentKeyIndex < 0 || agentKeyIndex >= AGENT_KEY_COUNT) {
     throw new RangeError(`agentKeyIndex must be an integer between 0 and ${AGENT_KEY_COUNT - 1}.`);
   }
@@ -65,13 +121,13 @@ export function encodeAgentKeyLighting({
   speed,
   syncKeysLighting,
   syncAmbientLighting,
-}) {
+}: AgentKeyLightingOptions): AgentKeyLightingWire {
   assertAgentKeyIndex(agentKeyIndex);
   assertRgbColor(color, "color");
   assertUnitInterval(brightness, "brightness");
   assertLightingEffect(effect);
   assertUnitInterval(speed, "speed");
-  const wireEntry = { id: agentKeyIndex, c: color, b: brightness, e: effect, s: speed };
+  const wireEntry: AgentKeyLightingWire = { id: agentKeyIndex, c: color, b: brightness, e: effect, s: speed };
   if (syncKeysLighting !== undefined) wireEntry.sk = syncKeysLighting ? 1 : 0;
   if (syncAmbientLighting !== undefined) wireEntry.sa = syncAmbientLighting ? 1 : 0;
   return wireEntry;
@@ -82,11 +138,11 @@ export function encodeAgentKeyLighting({
  * Accepts 1-6 already-encoded entries; entries may address any subset of keys
  * but each key at most once.
  */
-export function agentKeyStatusParams(encodedEntries) {
+export function agentKeyStatusParams(encodedEntries: AgentKeyLightingWire[]): AgentKeyLightingWire[] {
   if (!Array.isArray(encodedEntries) || encodedEntries.length === 0 || encodedEntries.length > AGENT_KEY_COUNT) {
     throw new RangeError(`agentKeyStatusParams expects 1-${AGENT_KEY_COUNT} encoded entries.`);
   }
-  const seenIndexes = new Set();
+  const seenIndexes = new Set<number>();
   for (const entry of encodedEntries) {
     assertAgentKeyIndex(entry?.id);
     if (seenIndexes.has(entry.id)) throw new RangeError(`agent key ${entry.id} appears more than once.`);
@@ -98,7 +154,7 @@ export function agentKeyStatusParams(encodedEntries) {
 /**
  * Builds one channel object for an RpcMethod.lightingConfig request.
  */
-export function encodeLightingChannel({ color, brightness, effect, speed, mode = 0 }) {
+export function encodeLightingChannel({ color, brightness, effect, speed, mode = 0 }: LightingChannelOptions): LightingChannelWire {
   assertRgbColor(color, "color");
   assertUnitInterval(brightness, "brightness");
   assertLightingEffect(effect);
@@ -111,11 +167,11 @@ export function encodeLightingChannel({ color, brightness, effect, speed, mode =
  * Assembles the params object for RpcMethod.lightingConfig. Pass either or
  * both channels (already encoded with encodeLightingChannel).
  */
-export function lightingConfigParams({ keys, ambient }) {
+export function lightingConfigParams({ keys, ambient }: LightingConfigWire): LightingConfigWire {
   if (keys === undefined && ambient === undefined) {
     throw new TypeError("lightingConfigParams needs at least one of keys/ambient.");
   }
-  const params = {};
+  const params: LightingConfigWire = {};
   if (keys !== undefined) params.keys = keys;
   if (ambient !== undefined) params.ambient = ambient;
   return params;

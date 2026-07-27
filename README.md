@@ -7,10 +7,11 @@ the matching tmux pane, and the Micro controls drive the active pane.
 This repository is a pnpm monorepo with two packages behind two thin plugins:
 
 - [`packages/protocol`](packages/protocol) — **codex-micro-protocol**, a pure,
-  dependency-free codec for the Codex Micro's HID RPC protocol (vendorable on
-  its own; build your own abstractions on top of it)
+  dependency-free TypeScript codec for the Codex Micro's HID RPC protocol,
+  packaged with tsup as a publishable npm package (ESM + CJS + type
+  declarations; build your own abstractions on top of it)
 - [`packages/bridge`](packages/bridge) — the macOS bridge daemon and all
-  tmux/Claude plumbing, built on the codec
+  tmux/Claude plumbing, TypeScript built to `dist/` with tsup
 - a **tmux plugin** (TPM) that runs the HID bridge daemon
 - a **Claude Code plugin** whose hooks forward session events to the bridge
 
@@ -141,11 +142,13 @@ Claude Code. Restart tmux to clear loaded key bindings.
 ## Development
 
 ```sh
-pnpm install
-pnpm run verify   # syntax checks + tests in every package
-pnpm start        # run the bridge in the foreground
+pnpm install      # also builds both packages (prepare script)
+pnpm run verify   # build + typecheck + tests in every package
+pnpm start        # run the built bridge in the foreground
 ```
 
-The protocol codec's tests run under `bun test` (Bun required for
-development); the bridge's tests run under `node --test`. GitHub Actions runs
-the same verification on macOS runners with Node 20 and 22.
+Everything is TypeScript, built with tsup. The protocol codec's tests run
+under `bun test` (Bun required for development); the bridge's tests run under
+`node --test` through tsx. The tmux plugin and Claude hooks execute the plain
+ESM output in `packages/bridge/dist`, so end users only need Node. GitHub
+Actions runs the same verification on macOS runners with Node 20 and 22.

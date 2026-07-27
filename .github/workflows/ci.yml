@@ -25,4 +25,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run verify
-      - run: pnpm --filter codex-micro-protocol pack --dry-run
+      - run: pnpm --filter codex-micro-protocol exec npm pack --dry-run

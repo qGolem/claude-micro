@@ -13,7 +13,7 @@ is_bridge_pid() {
   kill -0 "$pid" 2>/dev/null || return 1
   local command
   command="$(ps -p "$pid" -o command= 2>/dev/null)"
-  [[ "$command" == *"$root/src/daemon.mjs"* ]]
+  [[ "$command" == *"$root/dist/daemon.js"* ]]
 }
 
 if [[ -f "$pid_file" ]]; then
@@ -23,13 +23,13 @@ if [[ -f "$pid_file" ]]; then
   fi
 fi
 
-if [[ ! -d "$root/node_modules/node-hid" ]]; then
-  print -u2 "claude-micro: dependencies missing; run 'pnpm install' in ${root:h:h}"
+if [[ ! -d "$root/node_modules/node-hid" || ! -f "$root/dist/daemon.js" ]]; then
+  print -u2 "claude-micro: dependencies or build missing; run 'pnpm install' in ${root:h:h}"
   exit 1
 fi
 
 node_bin="${CLAUDE_MICRO_NODE:-$(command -v node)}"
 [[ -n "$node_bin" ]] || { print -u2 "claude-micro: Node.js was not found"; exit 1; }
 rm -f "$pid_file" "$socket" "$health_file"
-nohup "$node_bin" "$root/src/daemon.mjs" >>"$log_file" 2>&1 &
+nohup "$node_bin" "$root/dist/daemon.js" >>"$log_file" 2>&1 &
 echo $! > "$pid_file"

@@ -3,7 +3,8 @@ export {
   CODEX_MICRO_PRODUCT_ID,
   VENDOR_USAGE_PAGE,
   isCodexMicroInterface,
-} from "./device.mjs";
+  type HidInterfaceDescriptor,
+} from "./device";
 
 export {
   HID_REPORT_ID,
@@ -14,7 +15,8 @@ export {
   encodeHidPackets,
   decodeHidPacket,
   rpcPayloadFromPacket,
-} from "./framing.mjs";
+  type DecodedHidPacket,
+} from "./framing";
 
 export {
   RpcMethod,
@@ -22,7 +24,14 @@ export {
   encodeRpcRequest,
   parseRpcMessage,
   RpcMessageStream,
-} from "./rpc.mjs";
+  type RpcMethodName,
+  type RpcRequest,
+  type RpcMessage,
+  type RpcEventMessage,
+  type RpcResponseMessage,
+  type RpcUnknownMessage,
+  type RpcInvalidMessage,
+} from "./rpc";
 
 export {
   LightingEffect,
@@ -32,7 +41,14 @@ export {
   agentKeyStatusParams,
   encodeLightingChannel,
   lightingConfigParams,
-} from "./lighting.mjs";
+  type LightingEffectValue,
+  type AgentKeyIndex,
+  type AgentKeyLightingOptions,
+  type AgentKeyLightingWire,
+  type LightingChannelOptions,
+  type LightingChannelWire,
+  type LightingConfigWire,
+} from "./lighting";
 
 export {
   KeyActionCode,
@@ -46,11 +62,18 @@ export {
   joystickDirection,
   JoystickFlickDetector,
   parseDeviceEvent,
-} from "./input.mjs";
+  type KeyActionCodeValue,
+  type KeyActionName,
+  type ParsedKeyEvent,
+  type JoystickSample,
+  type JoystickDirection,
+  type JoystickFlickDetectorOptions,
+  type DeviceEvent,
+} from "./input";
 
 export {
   firmwareVersionRequest,
   agentKeyStatusRequest,
   lightingConfigRequest,
   encodeRequestPackets,
-} from "./requests.mjs";
+} from "./requests";

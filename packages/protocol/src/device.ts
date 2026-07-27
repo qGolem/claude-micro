@@ -7,11 +7,21 @@ export const CODEX_MICRO_PRODUCT_ID = 0x8360;
 export const VENDOR_USAGE_PAGE = 0xff00;
 
 /**
+ * The subset of a HID device descriptor this codec needs. Structurally
+ * compatible with node-hid's Device and WebHID's HIDDevice metadata.
+ */
+export interface HidInterfaceDescriptor {
+  vendorId?: number;
+  productId?: number;
+  usagePage?: number;
+}
+
+/**
  * Matches a HID device descriptor (as reported by node-hid, WebHID, or any
  * enumerator exposing vendorId/productId/usagePage) against the Codex Micro's
  * vendor RPC interface.
  */
-export function isCodexMicroInterface(descriptor) {
+export function isCodexMicroInterface(descriptor: HidInterfaceDescriptor | null | undefined): boolean {
   return (
     descriptor?.vendorId === WORK_LOUDER_VENDOR_ID &&
     descriptor?.productId === CODEX_MICRO_PRODUCT_ID &&

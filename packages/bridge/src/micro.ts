@@ -1,18 +1,19 @@
 // Thin node-hid transport for the Codex Micro. All wire knowledge lives in
 // codex-micro-protocol; this class only owns the device handle.
 
-import { HIDAsync, devices } from "node-hid";
+import { HIDAsync, devices, type Device } from "node-hid";
 import { RequestIdSequence, encodeRequestPackets, isCodexMicroInterface } from "codex-micro-protocol";
 
-export function findCodexMicros() {
+export function findCodexMicros(): Device[] {
   return devices().filter(isCodexMicroInterface);
 }
 
 export class CodexMicro {
-  #device;
+  #device: HIDAsync;
   #requestIds = new RequestIdSequence();
+  readonly descriptor: Device;
 
-  static async connect() {
+  static async connect(): Promise<CodexMicro> {
     const [descriptor] = findCodexMicros();
     if (!descriptor?.path) {
       throw new Error("Codex Micro vendor HID interface not found. Connect it by USB and grant Input Monitoring to your terminal.");
@@ -21,13 +22,13 @@ export class CodexMicro {
     return new CodexMicro(handle, descriptor);
   }
 
-  constructor(device, descriptor) {
+  constructor(device: HIDAsync, descriptor: Device) {
     this.#device = device;
     this.descriptor = descriptor;
   }
 
   /** Sends one RPC request; returns the request id it was assigned. */
-  async sendRequest(method, params) {
+  async sendRequest(method: string, params: unknown): Promise<number> {
     const requestId = this.#requestIds.next();
     for (const packet of encodeRequestPackets({ method, params, id: requestId })) {
       await this.#device.write(Buffer.from(packet));
@@ -35,11 +36,11 @@ export class CodexMicro {
     return requestId;
   }
 
-  async close() {
+  async close(): Promise<void> {
     await this.#device.close();
   }
 
-  onInput(listener) {
+  onInput(listener: (report: Buffer) => void): void {
     this.#device.on("data", listener);
     this.#device.on("error", () => {});
   }

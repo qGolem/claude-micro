@@ -1,4 +1,6 @@
-const HOOK_STATE = Object.freeze({
+export type SessionState = "idle" | "working" | "waiting" | "complete" | "error";
+
+const HOOK_STATE: Record<string, SessionState> = Object.freeze({
   SessionStart: "idle",
   UserPromptSubmit: "working",
   PreToolUse: "working",
@@ -9,7 +11,7 @@ const HOOK_STATE = Object.freeze({
   SessionEnd: "idle",
 });
 
-export function stateForHook(event) {
+export function stateForHook(event: Record<string, unknown>): SessionState | null {
   const name = event.hook_event_name ?? event.event ?? event.type;
   // Claude emits PreToolUse before it presents AskUserQuestion. Because this
   // hook is installed only for that tool, it is the earliest reliable point
@@ -19,34 +21,41 @@ export function stateForHook(event) {
     const text = JSON.stringify(event).toLowerCase();
     return text.includes("error") || text.includes("failed") ? "error" : "waiting";
   }
-  return HOOK_STATE[name] ?? null;
+  return typeof name === "string" ? (HOOK_STATE[name] ?? null) : null;
+}
+
+export interface SlotAssignment {
+  sessionId: string;
+  slot: number;
 }
 
 export class SessionSlots {
-  #slots = new Map();
+  #slots = new Map<string, number>();
 
-  constructor(entries = []) {
+  constructor(entries: Array<{ sessionId?: unknown; slot?: unknown }> = []) {
     for (const entry of entries) {
-      if (!entry || !Number.isInteger(entry.slot) || entry.slot < 0 || entry.slot > 5 || typeof entry.sessionId !== "string") continue;
-      if (this.#slots.has(entry.sessionId) || Array.from(this.#slots.values()).includes(entry.slot)) continue;
-      this.#slots.set(entry.sessionId, entry.slot);
+      const { sessionId, slot } = entry ?? {};
+      if (typeof slot !== "number" || !Number.isInteger(slot) || slot < 0 || slot > 5 || typeof sessionId !== "string") continue;
+      if (this.#slots.has(sessionId) || Array.from(this.#slots.values()).includes(slot)) continue;
+      this.#slots.set(sessionId, slot);
     }
   }
 
-  acquire(sessionId) {
-    if (this.#slots.has(sessionId)) return this.#slots.get(sessionId);
+  acquire(sessionId: string): number {
+    const existing = this.#slots.get(sessionId);
+    if (existing !== undefined) return existing;
     const used = new Set(this.#slots.values());
-    const slot = Array.from({ length: 6 }, (_, index) => index).find((index) => !used.has(index));
+    const slot = Array.from({ length: 6 }, (_unused, index) => index).find((index) => !used.has(index));
     if (slot === undefined) throw new Error("All six Codex Micro agent slots are in use.");
     this.#slots.set(sessionId, slot);
     return slot;
   }
 
-  release(sessionId) {
+  release(sessionId: string): void {
     this.#slots.delete(sessionId);
   }
 
-  entries() {
+  entries(): SlotAssignment[] {
     return Array.from(this.#slots, ([sessionId, slot]) => ({ sessionId, slot }));
   }
 }

@@ -12,9 +12,8 @@ if (!body.trim()) process.exit(0);
 
 // Claude hooks inherit TMUX_PANE. Preserve it so the matching frosted key can
 // focus this exact pane later through tmux.
-let event;
 try {
-  event = JSON.parse(body);
+  const event = JSON.parse(body) as Record<string, unknown>;
   if (process.env.TMUX_PANE) event.tmux_pane = process.env.TMUX_PANE;
   // Diagnostic trail for understanding lifecycle transitions. Do not record
   // prompt bodies; notification text is capped because it explains why an
@@ -41,7 +40,7 @@ let response = "";
 let finished = false;
 const timeout = setTimeout(() => finish(new Error(`bridge did not respond within ${timeoutMs}ms`)), timeoutMs);
 
-function finish(error) {
+function finish(error?: Error): void {
   if (finished) return;
   finished = true;
   clearTimeout(timeout);
@@ -54,14 +53,14 @@ function finish(error) {
 
 client.on("connect", () => client.end(body));
 client.setEncoding("utf8");
-client.on("data", (data) => (response += data));
+client.on("data", (data: string) => (response += data));
 client.on("end", () => {
   try {
-    const result = JSON.parse(response);
+    const result = JSON.parse(response) as { ok?: boolean; error?: string };
     if (!result?.ok) throw new Error(result?.error ?? "bridge rejected the hook event");
     finish();
   } catch (error) {
-    finish(error);
+    finish(error as Error);
   }
 });
 client.on("error", finish);

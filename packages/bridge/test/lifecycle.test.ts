@@ -34,5 +34,5 @@ test("reset does not signal an unrelated process referenced by a stale PID file"
 
   execFileSync("zsh", [reset], { env: environment });
   assert.equal(fs.readFileSync(marker, "utf8").trim(), "started");
-  assert.doesNotThrow(() => process.kill(unrelated.pid, 0));
+  assert.doesNotThrow(() => process.kill(unrelated.pid!, 0));
 });

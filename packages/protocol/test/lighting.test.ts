@@ -9,7 +9,8 @@ import {
   lightingConfigParams,
   lightingConfigRequest,
   encodeRequestPackets,
-} from "../src/index.mjs";
+  type AgentKeyIndex,
+} from "../src/index";
 
 describe("encodeAgentKeyLighting", () => {
   test("maps descriptive fields onto the abbreviated wire shape", () => {
@@ -41,28 +42,30 @@ describe("encodeAgentKeyLighting", () => {
   });
 
   test("rejects out-of-range fields", () => {
-    const validEntry = { agentKeyIndex: 0, color: 0xffffff, brightness: 1, effect: 1, speed: 1 };
+    const validEntry = { agentKeyIndex: 0 as AgentKeyIndex, color: 0xffffff, brightness: 1, effect: 1 as const, speed: 1 };
+    // @ts-expect-error deliberately out-of-range index to test the runtime guard
     expect(() => encodeAgentKeyLighting({ ...validEntry, agentKeyIndex: 6 })).toThrow(RangeError);
     expect(() => encodeAgentKeyLighting({ ...validEntry, color: 0x1000000 })).toThrow(RangeError);
     expect(() => encodeAgentKeyLighting({ ...validEntry, color: 0.5 })).toThrow(RangeError);
     expect(() => encodeAgentKeyLighting({ ...validEntry, brightness: 1.1 })).toThrow(RangeError);
+    // @ts-expect-error deliberately invalid effect to test the runtime guard
     expect(() => encodeAgentKeyLighting({ ...validEntry, effect: 7 })).toThrow(RangeError);
     expect(() => encodeAgentKeyLighting({ ...validEntry, speed: Number.NaN })).toThrow(RangeError);
   });
 });
 
 describe("agentKeyStatusParams", () => {
-  const idleEntry = (agentKeyIndex) =>
+  const idleEntry = (agentKeyIndex: AgentKeyIndex) =>
     encodeAgentKeyLighting({ agentKeyIndex, color: 0xffffff, brightness: 0.35, effect: LightingEffect.solid, speed: 0 });
 
   test("accepts a full six-key update and partial updates", () => {
-    expect(agentKeyStatusParams([0, 1, 2, 3, 4, 5].map(idleEntry))).toHaveLength(6);
+    expect(agentKeyStatusParams(([0, 1, 2, 3, 4, 5] as const).map(idleEntry))).toHaveLength(6);
     expect(agentKeyStatusParams([idleEntry(3)])).toHaveLength(1);
   });
 
   test("rejects empty, oversized, and duplicate-key updates", () => {
     expect(() => agentKeyStatusParams([])).toThrow(RangeError);
-    expect(() => agentKeyStatusParams([0, 1, 2, 3, 4, 5, 5].map(idleEntry))).toThrow(RangeError);
+    expect(() => agentKeyStatusParams(([0, 1, 2, 3, 4, 5, 5] as const).map(idleEntry))).toThrow(RangeError);
     expect(() => agentKeyStatusParams([idleEntry(1), idleEntry(1)])).toThrow(RangeError);
   });
 });
@@ -98,7 +101,7 @@ describe("request builders", () => {
     const packets = encodeRequestPackets(request);
     expect(packets.length).toBeGreaterThan(0);
     const wireText = new TextDecoder().decode(
-      Uint8Array.from(packets.flatMap((packet) => [...packet.subarray(3, 3 + packet[2])])),
+      Uint8Array.from(packets.flatMap((packet) => [...packet.subarray(3, 3 + packet[2]!)])),
     );
     expect(JSON.parse(wireText)).toEqual({ method: "v.oai.rgbcfg", params: { keys: channel, ambient: channel }, id: 100 });
   });

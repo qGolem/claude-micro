@@ -2,10 +2,15 @@
 // request/response round-trip using the codec's stream decoder.
 
 import { HIDAsync } from "node-hid";
-import { RpcMessageStream, encodeRequestPackets } from "codex-micro-protocol";
-import { findCodexMicros } from "../src/micro.mjs";
+import {
+  RpcMessageStream,
+  encodeRequestPackets,
+  type RpcRequest,
+  type RpcResponseMessage,
+} from "codex-micro-protocol";
+import { findCodexMicros } from "../src/micro";
 
-export async function openCodexMicro() {
+export async function openCodexMicro(): Promise<HIDAsync> {
   const [descriptor] = findCodexMicros();
   if (!descriptor?.path) throw new Error("Codex Micro vendor HID interface not found.");
   return HIDAsync.open(descriptor.path, { nonExclusive: true });
@@ -16,7 +21,11 @@ export async function openCodexMicro() {
  * Returns the parsed response message, or null on timeout (the firmware
  * occasionally accepts a lighting update without acknowledging it).
  */
-export async function sendRequestAndAwaitResponse(device, request, { timeoutMs = 3_000 } = {}) {
+export async function sendRequestAndAwaitResponse(
+  device: HIDAsync,
+  request: RpcRequest,
+  { timeoutMs = 3_000 }: { timeoutMs?: number } = {},
+): Promise<RpcResponseMessage | null> {
   for (const packet of encodeRequestPackets(request)) await device.write(Buffer.from(packet));
   const messageStream = new RpcMessageStream();
   const deadline = Date.now() + timeoutMs;
