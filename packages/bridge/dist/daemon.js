@@ -8,6 +8,7 @@ import {
   RpcMethod,
   assertAgentKeyIndex,
   encodeAgentKeyLighting,
+  findCodexMicros,
   parseDeviceEvent,
   rpcPayloadFromPacket
 } from "./chunk-ZKFY4ZTV.js";
@@ -328,6 +329,11 @@ var reconnecting = false;
 var refreshInFlight = null;
 var consecutiveDeviceFailures = 0;
 var nextReconnectAllowedAt = 0;
+var lastWrittenLighting = null;
+var nextForcedLightingWriteAt = 0;
+var consecutiveRefreshFailures = 0;
+var FORCED_LIGHTING_RESYNC_MS = 5e3;
+var REFRESH_FAILURES_BEFORE_RECONNECT = 3;
 try {
   micro = await CodexMicro.connect();
   writeHealth("connected", true);
@@ -357,6 +363,8 @@ async function reconnectMicro() {
         micro = await withDeviceTimeout(CodexMicro.connect(), "device connect");
         messageStream.reset();
         attachInput(micro);
+        lastWrittenLighting = null;
+        consecutiveRefreshFailures = 0;
         writeHealth("connected", true);
         reportRepeating("Claude Micro reconnected.");
         return;
@@ -373,28 +381,47 @@ async function reconnectMicro() {
 function agentKeyLightingSnapshot() {
   return agentStates.map((state, agentKeyIndex) => agentKeyLightingForState(agentKeyIndex, state));
 }
+function scheduleReconnect() {
+  const now = Date.now();
+  if (now < nextReconnectAllowedAt) return;
+  consecutiveDeviceFailures += 1;
+  const backoffMs = Math.min(maxReconnectBackoffMs, 500 * 2 ** Math.min(consecutiveDeviceFailures - 1, 6));
+  nextReconnectAllowedAt = now + backoffMs;
+  void reconnectMicro();
+}
 async function refreshAgentKeys() {
   if (refreshing) return;
   if (reconnecting) return;
   const handle = micro;
-  if (!handle) return;
+  if (!handle) {
+    scheduleReconnect();
+    return;
+  }
   refreshing = true;
   try {
-    const write = handle.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot());
+    const snapshot = agentKeyLightingSnapshot();
+    const fingerprint = JSON.stringify(snapshot);
+    const now = Date.now();
+    if (fingerprint === lastWrittenLighting && now < nextForcedLightingWriteAt) {
+      writeHealth("connected");
+      return;
+    }
+    const write = handle.sendRequest(RpcMethod.agentKeyStatus, snapshot);
     refreshInFlight = write;
     await withDeviceTimeout(write, "agent-key refresh");
+    lastWrittenLighting = fingerprint;
+    nextForcedLightingWriteAt = now + FORCED_LIGHTING_RESYNC_MS;
+    consecutiveRefreshFailures = 0;
     consecutiveDeviceFailures = 0;
     nextReconnectAllowedAt = 0;
     writeHealth("connected");
   } catch (error) {
     reportRepeating(`Claude Micro refresh failed: ${error.message}`);
-    writeHealth("reconnecting", true);
-    const now = Date.now();
-    if (now >= nextReconnectAllowedAt) {
-      consecutiveDeviceFailures += 1;
-      const backoffMs = Math.min(maxReconnectBackoffMs, 500 * 2 ** Math.min(consecutiveDeviceFailures - 1, 6));
-      nextReconnectAllowedAt = now + backoffMs;
-      void reconnectMicro();
+    lastWrittenLighting = null;
+    consecutiveRefreshFailures += 1;
+    if (consecutiveRefreshFailures >= REFRESH_FAILURES_BEFORE_RECONNECT) {
+      writeHealth("reconnecting", true);
+      scheduleReconnect();
     }
   } finally {
     refreshInFlight = null;
@@ -417,6 +444,17 @@ function writeSlots() {
 }
 await refreshAgentKeys();
 var refreshTimer = setInterval(() => void refreshAgentKeys(), 75);
+var identityTimer = setInterval(() => {
+  if (!micro || reconnecting) return;
+  try {
+    const [current] = findCodexMicros();
+    if (current?.path === micro.descriptor.path) return;
+    reportRepeating("Claude Micro device instance changed; reconnecting.");
+    writeHealth("reconnecting", true);
+    scheduleReconnect();
+  } catch {
+  }
+}, 2500);
 function run(command, args) {
   return new Promise((resolve) => execFile(command, args, (error, _stdout, stderr) => {
     if (error) debugLog("bridge.log", `${(/* @__PURE__ */ new Date()).toISOString()} ${command}: ${stderr || error.message}
@@ -655,6 +693,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     try {
       server.close();
       clearInterval(refreshTimer);
+      clearInterval(identityTimer);
       try {
         if (micro) {
           await withDeviceTimeout(

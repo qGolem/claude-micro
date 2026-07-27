@@ -22,8 +22,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // log: "absent" = no device to enumerate, "write" = writes reject the way a
 // disconnected HID handle does, "closed" = the handle reports itself closed.
 const HID_STUB = `import { EventEmitter } from "node:events";
+import fs from "node:fs";
 
-const fault = () => process.env.CLAUDE_MICRO_STUB_FAULT ?? "";
+// The env form is fixed for the daemon's lifetime; the file form lets a test
+// change the fault while the daemon runs (a device that vanishes and returns).
+const fault = () => {
+  const file = process.env.CLAUDE_MICRO_STUB_FAULT_FILE;
+  if (file) {
+    try { return fs.readFileSync(file, "utf8").trim(); } catch { return ""; }
+  }
+  return process.env.CLAUDE_MICRO_STUB_FAULT ?? "";
+};
 
 export function devices() {
   if (fault() === "absent") return [];
@@ -49,7 +58,14 @@ export class HIDAsync extends EventEmitter {
   }
   async write(packet) {
     if (fault() === "write") throw new Error("Cannot write to hid device: Device is disconnected");
+    // Self-clearing: fails exactly one write, however the ticks land.
+    if (fault() === "write-once") {
+      fs.writeFileSync(process.env.CLAUDE_MICRO_STUB_FAULT_FILE, "");
+      throw new Error("Cannot write to hid device: IOHIDDeviceSetReport failed: not ready");
+    }
     if (fault() === "closed") throw new TypeError("device has been closed");
+    const writeLog = process.env.CLAUDE_MICRO_STUB_WRITE_LOG;
+    if (writeLog) fs.appendFileSync(writeLog, "w\\n");
     return packet.length;
   }
   async read() { return null; }
@@ -302,6 +318,120 @@ test("a hold-cleared slot is fully free: same session may return, others may cla
   assert.equal(newcomer.slot, 0, "a cleared key is claimable immediately");
   const returned = JSON.parse(await sendHook(sandbox.socketPath, { hook_event_name: "UserPromptSubmit", session_id: "cleared", tmux_pane: "%1" }));
   assert.equal(returned.slot, 1, "the cleared session re-registers fresh on new activity");
+});
+
+test("unchanged lighting is not rewritten every tick", async (context) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-writes-"));
+  const writeLog = path.join(scratch, "writes.log");
+  fs.writeFileSync(writeLog, "");
+  const sandbox = await startSandboxDaemon({ CLAUDE_MICRO_STUB_WRITE_LOG: writeLog });
+  context.after(() => {
+    stopSandbox(sandbox);
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  const writes = () => fs.readFileSync(writeLog, "utf8").split("\n").filter(Boolean).length;
+  await waitFor(() => writes() > 0, "the initial lighting push");
+  const afterStartup = writes();
+  // Bluetooth chokes on the old always-write refresh (~13/s). A quiet second
+  // must stay quiet — the only allowance is the slow forced resync (5 s).
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  const idleWrites = writes() - afterStartup;
+  assert.ok(idleWrites <= 2, `steady state wrote ${idleWrites} times in 1s (was ~13/s before dirty-tracking)`);
+
+  // A real state change must still reach the device immediately.
+  await sendHook(sandbox.socketPath, { hook_event_name: "UserPromptSubmit", session_id: "fresh", tmux_pane: "%1" });
+  await waitFor(() => writes() > afterStartup + idleWrites, "the state change to be written");
+});
+
+test("a transient write failure retries without tearing down the connection", async (context) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-transient-"));
+  const faultFile = path.join(scratch, "fault");
+  fs.writeFileSync(faultFile, "");
+  const sandbox = await startSandboxDaemon({ CLAUDE_MICRO_STUB_FAULT_FILE: faultFile });
+  context.after(() => {
+    stopSandbox(sandbox);
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+  const health = () => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(sandbox.directory, "health.json"), "utf8")) as { state: string };
+    } catch {
+      return { state: "unknown" };
+    }
+  };
+  await waitFor(() => health().state === "connected", "the daemon to connect");
+  // The daemon announces failures and rebuilt connections via reportRepeating
+  // (stderr); capture both streams as teardown evidence that does not depend
+  // on sampling health fast enough.
+  let daemonOutput = "";
+  sandbox.daemon.stdout.on("data", (chunk: Buffer) => (daemonOutput += chunk.toString()));
+  sandbox.daemon.stderr.on("data", (chunk: Buffer) => (daemonOutput += chunk.toString()));
+
+  // Exactly one failing write (the stub clears the fault as it throws): below
+  // the teardown threshold, so the daemon must ride it out as connected.
+  fs.writeFileSync(faultFile, "write-once");
+  await sendHook(sandbox.socketPath, { hook_event_name: "UserPromptSubmit", session_id: "blip", tmux_pane: "%1" });
+  await waitFor(() => daemonOutput.includes("refresh failed"), "the blip to actually fail a write");
+  for (let sample = 0; sample < 20; sample += 1) {
+    assert.notEqual(health().state, "reconnecting", "a single write failure must not tear down the connection");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.doesNotMatch(daemonOutput, /reconnected/i, "the connection was rebuilt behind the scenes");
+});
+
+test("a device that re-enumerates behind a live handle is noticed and reopened", async (context) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-zombie-"));
+  const faultFile = path.join(scratch, "fault");
+  fs.writeFileSync(faultFile, "");
+  const sandbox = await startSandboxDaemon({ CLAUDE_MICRO_STUB_FAULT_FILE: faultFile });
+  context.after(() => {
+    stopSandbox(sandbox);
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+  const health = () => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(sandbox.directory, "health.json"), "utf8")) as { state: string };
+    } catch {
+      return { state: "unknown" };
+    }
+  };
+  await waitFor(() => health().state === "connected", "the daemon to connect");
+
+  // A Bluetooth power cycle re-enumerates the device while writes to the old
+  // handle keep succeeding (the stub's "absent" empties enumeration but does
+  // not fail writes — exactly the zombie observed live). Write failures can
+  // never notice this; the identity watch must.
+  fs.writeFileSync(faultFile, "absent");
+  await waitFor(() => health().state === "reconnecting", "the identity watch to notice the stale handle", 10_000);
+
+  fs.writeFileSync(faultFile, "");
+  await waitFor(() => health().state === "connected", "the reappeared instance to be reopened", 15_000);
+});
+
+test("a device that returns after the reconnect burst is picked up without a restart", async (context) => {
+  const faultDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-fault-"));
+  const faultFile = path.join(faultDirectory, "fault");
+  fs.writeFileSync(faultFile, "absent");
+  const sandbox = await startSandboxDaemon({ CLAUDE_MICRO_STUB_FAULT_FILE: faultFile });
+  context.after(() => {
+    stopSandbox(sandbox);
+    fs.rmSync(faultDirectory, { recursive: true, force: true });
+  });
+
+  const health = () => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(sandbox.directory, "health.json"), "utf8")) as { state: string };
+    } catch {
+      return { state: "unknown" };
+    }
+  };
+  // The initial burst is 10 attempts over ~5 s; it must end in "reconnecting",
+  // after which only the no-handle tick can ever try again.
+  await waitFor(() => health().state === "reconnecting", "the first reconnect burst to time out", 15_000);
+
+  fs.writeFileSync(faultFile, "");
+  await waitFor(() => health().state === "connected", "the returned device to be picked up unprompted", 15_000);
 });
 
 test("refuses to start when another bridge already owns the socket", async (context) => {

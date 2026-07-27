@@ -13,7 +13,7 @@ import {
   type JoystickDirection,
   type RpcMessage,
 } from "codex-micro-protocol";
-import { CodexMicro } from "./micro";
+import { CodexMicro, findCodexMicros } from "./micro";
 import { SessionSlots, stateForHook } from "./state";
 import { agentKeyLightingForState } from "./status-lighting";
 
@@ -285,6 +285,11 @@ let reconnecting = false;
 let refreshInFlight: Promise<unknown> | null = null;
 let consecutiveDeviceFailures = 0;
 let nextReconnectAllowedAt = 0;
+let lastWrittenLighting: string | null = null;
+let nextForcedLightingWriteAt = 0;
+let consecutiveRefreshFailures = 0;
+const FORCED_LIGHTING_RESYNC_MS = 5_000;
+const REFRESH_FAILURES_BEFORE_RECONNECT = 3;
 
 try {
   micro = await CodexMicro.connect();
@@ -325,6 +330,10 @@ async function reconnectMicro(): Promise<void> {
         micro = await withDeviceTimeout(CodexMicro.connect(), "device connect");
         messageStream.reset();
         attachInput(micro);
+        // The device may have rebooted across the gap (USB→Bluetooth handover
+        // does) and lost its lighting; force the next tick to push it all.
+        lastWrittenLighting = null;
+        consecutiveRefreshFailures = 0;
         writeHealth("connected", true);
         // Throttled: a device that connects but refuses writes would otherwise
         // announce a "reconnect" on every retry.
@@ -345,36 +354,71 @@ function agentKeyLightingSnapshot() {
   return agentStates.map((state, agentKeyIndex) => agentKeyLightingForState(agentKeyIndex, state));
 }
 
+// Rate-limited entry to reconnectMicro, shared by the two callers that notice
+// the device is gone: write failures, and the no-handle tick below. Delay
+// doubles per consecutive failure up to 30 s, and resets on the first
+// successful write.
+function scheduleReconnect(): void {
+  const now = Date.now();
+  if (now < nextReconnectAllowedAt) return;
+  consecutiveDeviceFailures += 1;
+  const backoffMs = Math.min(maxReconnectBackoffMs, 500 * 2 ** Math.min(consecutiveDeviceFailures - 1, 6));
+  nextReconnectAllowedAt = now + backoffMs;
+  void reconnectMicro();
+}
+
+// The LED effects (breathing, speed) run on the device itself, so the wire
+// state only changes when a session's state does. Rewriting it every 75 ms
+// anyway saturates Bluetooth HID, whose SetReport returns transient "not
+// ready"/"general error" under that pressure — and a teardown per failure
+// resets the LEDs in a visible flash. So: write only on change (with a slow
+// resync in case the device lost its state), and only tear down after several
+// consecutive failures.
 async function refreshAgentKeys(): Promise<void> {
   if (refreshing) return;
   if (reconnecting) return;
   const handle = micro;
-  if (!handle) return;
+  if (!handle) {
+    // No handle means no writes and therefore no write failures — without
+    // this, nothing ever scheduled another reconnect once a burst timed out,
+    // and a device unplugged for longer than one burst (~5 s) was never
+    // picked up again until a manual restart.
+    scheduleReconnect();
+    return;
+  }
   refreshing = true;
   try {
+    const snapshot = agentKeyLightingSnapshot();
+    const fingerprint = JSON.stringify(snapshot);
+    const now = Date.now();
+    if (fingerprint === lastWrittenLighting && now < nextForcedLightingWriteAt) {
+      // The tmux badge reads the health file's age (4 s window), so staying
+      // silent while idle would report a live bridge as dead.
+      writeHealth("connected");
+      return;
+    }
     // ChatGPT Codex can also publish an idle state. Refreshing only the
     // per-thread channel lets Claude own the Agent LEDs without changing the
     // Input layer or the frame/background RGB configuration.
-    const write = handle.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot());
+    const write = handle.sendRequest(RpcMethod.agentKeyStatus, snapshot);
     refreshInFlight = write;
     await withDeviceTimeout(write, "agent-key refresh");
+    lastWrittenLighting = fingerprint;
+    nextForcedLightingWriteAt = now + FORCED_LIGHTING_RESYNC_MS;
+    consecutiveRefreshFailures = 0;
     consecutiveDeviceFailures = 0;
     nextReconnectAllowedAt = 0;
     writeHealth("connected");
   } catch (error) {
     reportRepeating(`Claude Micro refresh failed: ${(error as Error).message}`);
-    writeHealth("reconnecting", true);
-    // Back off. The refresh loop runs every 75 ms, so reconnecting on every
-    // failure means hammering the USB device ~13 times a second — which burns
-    // CPU, floods the log, and makes a marginal device worse rather than
-    // better. Delay doubles per consecutive failure up to 30 s, and resets the
-    // moment a write succeeds.
-    const now = Date.now();
-    if (now >= nextReconnectAllowedAt) {
-      consecutiveDeviceFailures += 1;
-      const backoffMs = Math.min(maxReconnectBackoffMs, 500 * 2 ** Math.min(consecutiveDeviceFailures - 1, 6));
-      nextReconnectAllowedAt = now + backoffMs;
-      void reconnectMicro();
+    // Retry the write on the next tick rather than trusting the device state.
+    lastWrittenLighting = null;
+    consecutiveRefreshFailures += 1;
+    if (consecutiveRefreshFailures >= REFRESH_FAILURES_BEFORE_RECONNECT) {
+      writeHealth("reconnecting", true);
+      // Backed off, not immediate: reconnecting on every failure hammers the
+      // device, burns CPU, and floods the log.
+      scheduleReconnect();
     }
   } finally {
     refreshInFlight = null;
@@ -398,6 +442,24 @@ function writeSlots(): void {
 
 await refreshAgentKeys();
 const refreshTimer = setInterval(() => void refreshAgentKeys(), 75);
+
+// A power cycle (unplugging the cable does one, en route to Bluetooth)
+// re-enumerates the Micro as a NEW HID instance, while writes to the stale
+// handle keep reporting success — a zombie connection: LEDs frozen, key
+// presses arriving on an instance nobody has open. Write failures therefore
+// cannot detect this; watching the enumerated identity can.
+const identityTimer = setInterval(() => {
+  if (!micro || reconnecting) return;
+  try {
+    const [current] = findCodexMicros();
+    if (current?.path === micro.descriptor.path) return;
+    reportRepeating("Claude Micro device instance changed; reconnecting.");
+    writeHealth("reconnecting", true);
+    scheduleReconnect();
+  } catch {
+    // An enumeration hiccup is not evidence of anything; check again shortly.
+  }
+}, 2_500);
 
 function run(command: string, args: string[]): Promise<string> {
   return new Promise((resolve) => execFile(command, args, (error, _stdout, stderr) => {
@@ -710,6 +772,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     try {
       server.close();
       clearInterval(refreshTimer);
+      clearInterval(identityTimer);
       try {
         if (micro) {
           await withDeviceTimeout(
