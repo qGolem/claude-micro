@@ -78,9 +78,14 @@ if [[ "$auto_status" == "on" ]]; then
   status_left="$(tmux show-option -gqv status-left)"
   # Replace the format published by versions 0.1.x; tmux displays it literally.
   status_left="${status_left//\#\{\@claude_micro_status\}/}"
-  if [[ "$status_left" != *"$status_format"* ]]; then
-    tmux set-option -g status-left "$status_left $status_format"
-  fi
+  # Strip any previously appended segment rather than exact-matching the
+  # current one: the segment embeds the node path, which moves when the nvm
+  # default changes — an exact-match guard would then stack a duplicate and
+  # strand the old segment pointing at a node that may no longer exist.
+  shopt -s extglob
+  status_left="${status_left//\#\(+([!)])tmux-status.js\)/}"
+  status_left="${status_left%%+( )}"
+  tmux set-option -g status-left "$status_left $status_format"
 fi
 
 if [[ "$slot_bindings" != "off" ]]; then

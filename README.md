@@ -130,12 +130,36 @@ set -g @claude_micro_vendor_key 'V'      # install the device driver ('off' to u
 set -g @claude_micro_auto_vendor 'off'   # 'on' installs the driver on load instead
 set -g @claude_micro_slot_bindings 'on'  # Meta-1..Meta-6 focus keys
 set -g @claude_micro_auto_status 'off'   # 'on' appends the status module once
-set -g @claude_micro_node '/path/node'   # only for restricted-PATH tmux servers
+set -g @claude_micro_node '/path/node'   # pin Node: restricted-PATH tmux
+                                         # servers, or to keep one version
+                                         # across nvm default changes
 ```
 
 **Prefix + k** restarts the bridge; **Prefix + K** stops it and releases the
 HID device (it confirms with a tmux message). Starting it again is
 Prefix + k, or any new tmux server.
+
+Unpinned, the plugin resolves `node` from the tmux server's `PATH` — with nvm
+that is whatever version was active when tmux started, and the scripts keep
+using that absolute path afterwards. Timing knobs are environment variables
+(set with `set-environment -g` before Prefix + k), all in milliseconds:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CLAUDE_MICRO_AGENT_HOLD_MS` | `3000` | how long to hold an Agent key to clear its slot |
+| `CLAUDE_MICRO_SLOT_STALE_MS` | `43200000` | a session silent this long (12 h) is evictable when all six keys are taken |
+| `CLAUDE_MICRO_DEVICE_TIMEOUT_MS` | `2000` | HID device open/write timeout |
+| `CLAUDE_MICRO_MAX_RECONNECT_BACKOFF_MS` | `30000` | cap on the device-reconnect backoff |
+| `CLAUDE_MICRO_HOOK_TIMEOUT_MS` | `1500` | hook forwarder gives up on the bridge socket after this |
+| `CLAUDE_MICRO_MAX_HOOK_BYTES` | `262144` | largest hook payload the daemon accepts (bytes, not ms) |
+
+`CLAUDE_MICRO_REPLACE=1` lets a manually started daemon take over from a
+running bridge — the error message that suggests it is the only time you need
+it. The runtime file locations (`CLAUDE_MICRO_PID`, `_SOCKET`, `_HEALTH`,
+`_SLOTS`, `_DEVICE_LOCK`; defaults under `/private/tmp`) and the vendor fetch
+source (`CLAUDE_MICRO_REPO`, `_VENDOR_TAG`, `_VENDOR_BASE_URL`; defaults to
+this repo's Releases) can be overridden the same way — those exist for tests
+and forks, not everyday use.
 
 ## Logging
 
@@ -189,9 +213,23 @@ start it with `CLAUDE_MICRO_DEBUG_DIR=/private/tmp/claude-micro-debug`.
 
 ## Uninstall
 
-Remove the `@plugin` line (Prefix + alt + u, or delete
-`~/.tmux/plugins/claude-micro`) and run `/plugin uninstall claude-micro` in
-Claude Code. Restart tmux to clear loaded key bindings.
+In this order — the stop scripts are part of the checkout, so stop the bridge
+before deleting them out from under it (the daemon is detached and would
+otherwise keep holding the HID device):
+
+1. **Prefix + K** — stop the bridge; releases the device and removes its
+   runtime files.
+2. `/plugin uninstall claude-micro` in Claude Code (add
+   `/plugin marketplace remove claude-micro` to drop the source too).
+3. Remove the `@plugin` line from your tmux config, then **Prefix + alt + u**
+   so TPM deletes the checkout — it lives in `~/.tmux/plugins/claude-micro`,
+   or `~/.config/tmux/plugins/claude-micro` if your tmux config is under
+   `~/.config`.
+4. Restart tmux to clear the loaded key bindings and status module.
+
+If you ever enabled logging or debug traces, their files remain under
+`/private/tmp/claude-micro*` — delete them with
+`rm -rf /private/tmp/claude-micro*`.
 
 ## Development
 

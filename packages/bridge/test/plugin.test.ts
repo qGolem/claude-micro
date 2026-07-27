@@ -123,6 +123,66 @@ test("the event forwarder runs with no node_modules present", () => {
   assert.deepEqual(external, [], "event.js must bundle everything except node builtins");
 });
 
+test("auto_status keeps exactly one status segment, even when the node path changes", (context) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-status-"));
+  context.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+
+  // A tmux stub that persists global options to a file, so successive
+  // entrypoint runs observe each other's writes — the duplication scenario.
+  const optionsFile = path.join(temporary, "options.json");
+  const readOptions = () => JSON.parse(fs.readFileSync(optionsFile, "utf8")) as Record<string, string>;
+  const tmuxStub = path.join(temporary, "tmux");
+  fs.writeFileSync(tmuxStub, [
+    "#!/usr/bin/env node",
+    'const fs = require("fs");',
+    `const file = ${JSON.stringify(optionsFile)};`,
+    'const options = JSON.parse(fs.readFileSync(file, "utf8"));',
+    "const args = process.argv.slice(2);",
+    'if (args[0] === "show-option") process.stdout.write((options[args[args.length - 1]] ?? "") + "\\n");',
+    'if (args[0] === "set-option") { options[args[2]] = args[3]; fs.writeFileSync(file, JSON.stringify(options)); }',
+    "",
+  ].join("\n"), { mode: 0o755 });
+
+  const fakeNode = (name: string) => {
+    const binary = path.join(temporary, name);
+    fs.writeFileSync(binary, "#!/bin/sh\n", { mode: 0o755 });
+    return binary;
+  };
+  const nodeBefore = fakeNode("node-v22.22.0");
+  const nodeAfter = fakeNode("node-v23.1.0");
+
+  const runEntrypoint = (nodeBin: string) => {
+    const options = readOptions();
+    options["@claude_micro_node"] = nodeBin;
+    fs.writeFileSync(optionsFile, JSON.stringify(options));
+    execFileSync("bash", [path.join(repoRoot, "claude-micro.tmux")], {
+      env: { ...process.env, PATH: `${temporary}:${process.env.PATH}` },
+      stdio: "pipe",
+    });
+  };
+  const segments = () => [...readOptions()["status-left"]!.matchAll(/tmux-status\.js/g)].length;
+
+  // Seed with theme content plus the literal 0.1.x placeholder.
+  fs.writeFileSync(optionsFile, JSON.stringify({
+    "status-left": "theme-owned #{@claude_micro_status}",
+    "@claude_micro_auto_status": "on",
+  }));
+
+  runEntrypoint(nodeBefore);
+  assert.equal(segments(), 1, "first run appends the segment once");
+  assert.match(readOptions()["status-left"]!, /theme-owned/, "theme content survives");
+  assert.doesNotMatch(readOptions()["status-left"]!, /#\{@claude_micro_status\}/, "0.1.x placeholder removed");
+
+  runEntrypoint(nodeBefore);
+  assert.equal(segments(), 1, "an identical rerun does not duplicate");
+
+  runEntrypoint(nodeAfter);
+  assert.equal(segments(), 1, "a changed node path replaces the segment instead of stacking");
+  const statusLeft = readOptions()["status-left"]!;
+  assert.match(statusLeft, /node-v23\.1\.0/, "segment references the new node");
+  assert.doesNotMatch(statusLeft, /node-v22\.22\.0/, "stale segment is gone");
+});
+
 test("cleanup-legacy removes the 0.1.x tmux block and settings hooks, preserving the rest", (context) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-cleanup-"));
   context.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
