@@ -11,7 +11,14 @@ try {
   const event = JSON.parse(body);
   if (process.env.TMUX_PANE) event.tmux_pane = process.env.TMUX_PANE;
   const notification = typeof event.message === "string" ? event.message.slice(0, 300) : void 0;
-  if (auditPath) {
+  const auditCapBytes = Number(process.env.CLAUDE_MICRO_MAX_AUDIT_BYTES ?? 16 * 1024 * 1024);
+  let auditedBytes = 0;
+  try {
+    auditedBytes = auditPath ? fs.statSync(auditPath).size : 0;
+  } catch {
+    auditedBytes = 0;
+  }
+  if (auditPath && auditedBytes < auditCapBytes) {
     fs.appendFileSync(auditPath, `${JSON.stringify({
       at: (/* @__PURE__ */ new Date()).toISOString(),
       hook: event.hook_event_name,

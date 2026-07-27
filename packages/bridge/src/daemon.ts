@@ -84,12 +84,13 @@ if (runningBridge && process.env.CLAUDE_MICRO_REPLACE !== "1") {
   process.exit(1);
 }
 
-const debugFileBytes = new Map<string, number>();
-function debugLog(name: string, value: string): void {
-  if (!debugDir) return;
-  fs.mkdirSync(debugDir, { recursive: true, mode: 0o700 });
-  const target = path.join(debugDir, name);
-  let written = debugFileBytes.get(name);
+// Every append-only diagnostic file the daemon owns goes through here, so no
+// sink can grow without bound. Sizes are tracked in memory after the first
+// stat, and each file stops (loudly, once) at the cap rather than rotating —
+// these are traces, and the interesting part is where they started.
+const appendedFileBytes = new Map<string, number>();
+function appendCapped(target: string, value: string, capBytes: number): void {
+  let written = appendedFileBytes.get(target);
   if (written === undefined) {
     try {
       written = fs.statSync(target).size;
@@ -97,13 +98,19 @@ function debugLog(name: string, value: string): void {
       written = 0;
     }
   }
-  if (written >= maxDebugFileBytes) return;
+  if (written >= capBytes) return;
   fs.appendFileSync(target, value, { mode: 0o600 });
   const total = written + Buffer.byteLength(value);
-  debugFileBytes.set(name, total);
-  if (total >= maxDebugFileBytes) {
-    console.error(`Claude Micro: ${name} reached ${maxDebugFileBytes} bytes; tracing to it has stopped.`);
+  appendedFileBytes.set(target, total);
+  if (total >= capBytes) {
+    console.error(`Claude Micro: ${target} reached its ${capBytes}-byte cap; no longer writing to it.`);
   }
+}
+
+function debugLog(name: string, value: string): void {
+  if (!debugDir) return;
+  fs.mkdirSync(debugDir, { recursive: true, mode: 0o700 });
+  appendCapped(path.join(debugDir, name), value, maxDebugFileBytes);
 }
 
 /**
@@ -151,7 +158,23 @@ function withDeviceTimeout<T>(operation: Promise<T>, label: string): Promise<T> 
 
 function latencyLog(entry: Record<string, unknown>): void {
   if (!latencyLogPath) return;
-  fs.appendFileSync(latencyLogPath, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, { mode: 0o600 });
+  appendCapped(latencyLogPath, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, maxDebugFileBytes);
+}
+
+// A disconnected device makes the refresh loop fail every 75 ms; logging each
+// failure is what filled the daemon log with tens of thousands of identical
+// lines. Repeats are collapsed and counted instead.
+const lastReportedAt = new Map<string, { at: number; suppressed: number }>();
+function reportRepeating(message: string, intervalMs = 60_000): void {
+  const now = Date.now();
+  const previous = lastReportedAt.get(message);
+  if (previous && now - previous.at < intervalMs) {
+    previous.suppressed += 1;
+    return;
+  }
+  const suppressed = previous?.suppressed ?? 0;
+  lastReportedAt.set(message, { at: now, suppressed: 0 });
+  console.error(suppressed > 0 ? `${message} (repeated ${suppressed}x since the last report)` : message);
 }
 
 removeSocket();
@@ -225,7 +248,7 @@ async function reconnectMicro(): Promise<void> {
         await sleep(500);
       }
     }
-    console.error("Claude Micro reconnect timed out.");
+    reportRepeating("Claude Micro reconnect timed out.");
     writeHealth("reconnecting", true);
   } finally {
     reconnecting = false;
@@ -247,7 +270,7 @@ async function refreshAgentKeys(): Promise<void> {
     await withDeviceTimeout(micro.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot()), "agent-key refresh");
     writeHealth("connected");
   } catch (error) {
-    console.error(`Claude Micro refresh failed: ${(error as Error).message}`);
+    reportRepeating(`Claude Micro refresh failed: ${(error as Error).message}`);
     writeHealth("reconnecting", true);
     void reconnectMicro();
   } finally {
@@ -482,7 +505,7 @@ function attachInput(handle: CodexMicro): void {
       try {
         handleDeviceMessage(message);
       } catch (error) {
-        console.error(`Claude Micro: ignoring unhandled device message — ${(error as Error).message}`);
+        reportRepeating(`Claude Micro: ignoring unhandled device message — ${(error as Error).message}`);
         debugLog("bridge.log", `${new Date().toISOString()} device message failed: ${(error as Error).stack}\n`);
       }
     }

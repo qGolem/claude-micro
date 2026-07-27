@@ -33,3 +33,10 @@ if [[ -f "$pid_file" ]]; then
 fi
 
 rm -f "$pid_file" "$socket" "$health_file"
+
+# Bound to a key, so say something — a silent stop is indistinguishable from a
+# binding that did not fire. Skipped when there is no tmux server (the legacy
+# cleanup path also runs this script).
+if command -v tmux >/dev/null 2>&1; then
+  tmux display-message "Claude Micro: bridge stopped." 2>/dev/null || :
+fi

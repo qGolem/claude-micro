@@ -26,6 +26,8 @@ fi
 
 reset_key="$(option @claude_micro_reset_key)"
 reset_key="${reset_key:-k}"
+stop_key="$(option @claude_micro_stop_key)"
+stop_key="${stop_key:-K}"
 slot_bindings="$(option @claude_micro_slot_bindings)"
 slot_bindings="${slot_bindings:-on}"
 auto_status="$(option @claude_micro_auto_status)"
@@ -38,6 +40,12 @@ status_format="#($status_command)"
 tmux set-option -g @claude_micro_status_command "$status_command"
 tmux run-shell -b "$bridge_root/src/tmux-start-bridge.sh"
 tmux bind-key -N "Restart Claude Micro bridge" "$reset_key" run-shell -b "$bridge_root/src/tmux-reset-bridge.sh"
+# Stopping is deliberately a separate binding from restarting: the bridge holds
+# the HID device, so there has to be a way to release it without a restart
+# putting it straight back. Shifted by default, next to the reset key.
+if [[ "$stop_key" != "off" ]]; then
+  tmux bind-key -N "Stop Claude Micro bridge" "$stop_key" run-shell -b "$bridge_root/src/tmux-stop-bridge.sh"
+fi
 
 if [[ "$auto_status" == "on" ]]; then
   status_left="$(tmux show-option -gqv status-left)"

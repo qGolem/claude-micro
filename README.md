@@ -99,18 +99,39 @@ set -ag status-left ' #(#{@claude_micro_status_command})'
 ```
 
 The badge is green when connected; amber/red shows `↻ k` when
-reconnecting/stopped — press **Prefix + k** to reset the bridge.
+reconnecting/stopped — press **Prefix + k** to reset the bridge, or
+**Prefix + K** to stop it.
 
 ## Configuration
 
 Set options before the plugin line:
 
 ```tmux
-set -g @claude_micro_reset_key 'k'       # bridge reset binding
+set -g @claude_micro_reset_key 'k'       # restart the bridge
+set -g @claude_micro_stop_key 'K'        # stop the bridge ('off' to unbind)
 set -g @claude_micro_slot_bindings 'on'  # Meta-1..Meta-6 focus keys
 set -g @claude_micro_auto_status 'off'   # 'on' appends the status module once
 set -g @claude_micro_node '/path/node'   # only for restricted-PATH tmux servers
 ```
+
+**Prefix + k** restarts the bridge; **Prefix + K** stops it and releases the
+HID device (it confirms with a tmux message). Starting it again is
+Prefix + k, or any new tmux server.
+
+## Log retention
+
+Every file the bridge writes is bounded, so nothing grows forever:
+
+| File | Limit | Override |
+| --- | --- | --- |
+| `claude-micro.log` (daemon stdout) | rotates to `.log.1` past 8 MiB, at each start | `CLAUDE_MICRO_MAX_LOG_BYTES` |
+| `CLAUDE_MICRO_DEBUG_DIR` traces | 64 MiB per file, then stops | `CLAUDE_MICRO_MAX_DEBUG_BYTES` |
+| `CLAUDE_MICRO_LATENCY_LOG` | 64 MiB, then stops | `CLAUDE_MICRO_MAX_DEBUG_BYTES` |
+| `CLAUDE_MICRO_HOOK_AUDIT` | 16 MiB, then stops | `CLAUDE_MICRO_MAX_AUDIT_BYTES` |
+
+Only the daemon log is written by default; the other three are opt-in. Repeated
+identical daemon errors (a disconnected device retries every 75 ms) collapse
+into one line per minute with a suppressed-count suffix.
 
 ## Controls
 

@@ -252,6 +252,58 @@ test("refuses to start when another bridge already owns the socket", async (cont
   assert.equal(stillServing.ok, true, "the original bridge still owns a working socket");
 });
 
+test("diagnostic traces stop at their cap instead of growing without bound", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-caps-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const stubDirectory = path.join(directory, "node_modules", "node-hid");
+  fs.mkdirSync(stubDirectory, { recursive: true });
+  fs.writeFileSync(path.join(stubDirectory, "package.json"), JSON.stringify({ name: "node-hid", version: "0.0.0-stub", type: "module", main: "index.js" }));
+  fs.writeFileSync(path.join(stubDirectory, "index.js"), HID_STUB);
+  fs.cpSync(path.join(root, "dist"), path.join(directory, "dist"), { recursive: true });
+
+  const socketPath = path.join(directory, "bridge.sock");
+  const debugDirectory = path.join(directory, "traces");
+  const capBytes = 4_096;
+  const daemon = spawn(process.execPath, [path.join(directory, "dist", "daemon.js")], {
+    env: {
+      ...process.env,
+      CLAUDE_MICRO_SOCKET: socketPath,
+      CLAUDE_MICRO_SLOTS: path.join(directory, "slots.json"),
+      CLAUDE_MICRO_HEALTH: path.join(directory, "health.json"),
+      CLAUDE_MICRO_DEBUG_DIR: debugDirectory,
+      CLAUDE_MICRO_MAX_DEBUG_BYTES: String(capBytes),
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  }) as ChildProcessWithoutNullStreams;
+  context.after(() => daemon.kill("SIGKILL"));
+  daemon.stdout.resume();
+  daemon.stderr.resume();
+  await waitFor(() => fs.existsSync(socketPath), "the daemon socket");
+
+  // Every non-lighting report is traced, so this would run away uncapped.
+  for (let index = 0; index < 400; index += 1) {
+    daemon.stdin.write(`${hidReport({ m: "v.oai.hid", p: { k: "AG00", act: 0, filler: "x".repeat(20) } })}\n`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 600));
+
+  const rawTrace = path.join(debugDirectory, "hid-raw.log");
+  await waitFor(() => fs.existsSync(rawTrace), "the raw HID trace");
+  const size = fs.statSync(rawTrace).size;
+  // The cap is enforced before each append, so the file can exceed it by at
+  // most one line — what matters is that it stopped.
+  assert.ok(size < capBytes * 2, `trace stopped near its cap (was ${size} bytes)`);
+
+  const sizeAfterMore = await (async () => {
+    for (let index = 0; index < 200; index += 1) {
+      daemon.stdin.write(`${hidReport({ m: "v.oai.hid", p: { k: "AG01", act: 0, filler: "y".repeat(20) } })}\n`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return fs.statSync(rawTrace).size;
+  })();
+  assert.equal(sizeAfterMore, size, "no further growth once the cap is reached");
+});
+
 test("SIGTERM removes the socket so the next start is clean", async (context) => {
   const sandbox = await startSandboxDaemon();
   context.after(() => stopSandbox(sandbox));

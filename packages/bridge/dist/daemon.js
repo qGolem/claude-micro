@@ -165,12 +165,9 @@ Stop it first (Prefix + k restarts the tmux-managed bridge), or set CLAUDE_MICRO
   );
   process.exit(1);
 }
-var debugFileBytes = /* @__PURE__ */ new Map();
-function debugLog(name, value) {
-  if (!debugDir) return;
-  fs.mkdirSync(debugDir, { recursive: true, mode: 448 });
-  const target = path.join(debugDir, name);
-  let written = debugFileBytes.get(name);
+var appendedFileBytes = /* @__PURE__ */ new Map();
+function appendCapped(target, value, capBytes) {
+  let written = appendedFileBytes.get(target);
   if (written === void 0) {
     try {
       written = fs.statSync(target).size;
@@ -178,13 +175,18 @@ function debugLog(name, value) {
       written = 0;
     }
   }
-  if (written >= maxDebugFileBytes) return;
+  if (written >= capBytes) return;
   fs.appendFileSync(target, value, { mode: 384 });
   const total = written + Buffer.byteLength(value);
-  debugFileBytes.set(name, total);
-  if (total >= maxDebugFileBytes) {
-    console.error(`Claude Micro: ${name} reached ${maxDebugFileBytes} bytes; tracing to it has stopped.`);
+  appendedFileBytes.set(target, total);
+  if (total >= capBytes) {
+    console.error(`Claude Micro: ${target} reached its ${capBytes}-byte cap; no longer writing to it.`);
   }
+}
+function debugLog(name, value) {
+  if (!debugDir) return;
+  fs.mkdirSync(debugDir, { recursive: true, mode: 448 });
+  appendCapped(path.join(debugDir, name), value, maxDebugFileBytes);
 }
 function writeFileAtomically(targetPath, contents) {
   const temporaryPath = `${targetPath}.${process.pid}.tmp`;
@@ -222,8 +224,20 @@ function withDeviceTimeout(operation, label) {
 }
 function latencyLog(entry) {
   if (!latencyLogPath) return;
-  fs.appendFileSync(latencyLogPath, `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), ...entry })}
-`, { mode: 384 });
+  appendCapped(latencyLogPath, `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), ...entry })}
+`, maxDebugFileBytes);
+}
+var lastReportedAt = /* @__PURE__ */ new Map();
+function reportRepeating(message, intervalMs = 6e4) {
+  const now = Date.now();
+  const previous = lastReportedAt.get(message);
+  if (previous && now - previous.at < intervalMs) {
+    previous.suppressed += 1;
+    return;
+  }
+  const suppressed = previous?.suppressed ?? 0;
+  lastReportedAt.set(message, { at: now, suppressed: 0 });
+  console.error(suppressed > 0 ? `${message} (repeated ${suppressed}x since the last report)` : message);
 }
 removeSocket();
 var healthState = null;
@@ -290,7 +304,7 @@ async function reconnectMicro() {
         await sleep(500);
       }
     }
-    console.error("Claude Micro reconnect timed out.");
+    reportRepeating("Claude Micro reconnect timed out.");
     writeHealth("reconnecting", true);
   } finally {
     reconnecting = false;
@@ -307,7 +321,7 @@ async function refreshAgentKeys() {
     await withDeviceTimeout(micro.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot()), "agent-key refresh");
     writeHealth("connected");
   } catch (error) {
-    console.error(`Claude Micro refresh failed: ${error.message}`);
+    reportRepeating(`Claude Micro refresh failed: ${error.message}`);
     writeHealth("reconnecting", true);
     void reconnectMicro();
   } finally {
@@ -490,7 +504,7 @@ function attachInput(handle) {
       try {
         handleDeviceMessage(message);
       } catch (error) {
-        console.error(`Claude Micro: ignoring unhandled device message \u2014 ${error.message}`);
+        reportRepeating(`Claude Micro: ignoring unhandled device message \u2014 ${error.message}`);
         debugLog("bridge.log", `${(/* @__PURE__ */ new Date()).toISOString()} device message failed: ${error.stack}
 `);
       }

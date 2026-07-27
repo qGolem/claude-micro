@@ -19,7 +19,16 @@ try {
   // prompt bodies; notification text is capped because it explains why an
   // otherwise-idle session was surfaced.
   const notification = typeof event.message === "string" ? event.message.slice(0, 300) : undefined;
-  if (auditPath) {
+  // Opt-in audit trail, capped so a long-lived session cannot fill the disk.
+  // Each hook is a fresh process, so the size is checked rather than tracked.
+  const auditCapBytes = Number(process.env.CLAUDE_MICRO_MAX_AUDIT_BYTES ?? 16 * 1024 * 1024);
+  let auditedBytes = 0;
+  try {
+    auditedBytes = auditPath ? fs.statSync(auditPath).size : 0;
+  } catch {
+    auditedBytes = 0;
+  }
+  if (auditPath && auditedBytes < auditCapBytes) {
     fs.appendFileSync(auditPath, `${JSON.stringify({
       at: new Date().toISOString(),
       hook: event.hook_event_name,
