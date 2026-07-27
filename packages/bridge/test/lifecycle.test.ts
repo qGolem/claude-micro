@@ -80,6 +80,8 @@ for (const scriptName of ["tmux-reset-bridge.sh", "tmux-stop-bridge.sh"]) {
     const script = path.join(scripts, scriptName);
     fs.copyFileSync(path.join(root, "src", scriptName), script);
     fs.chmodSync(script, 0o755);
+    // The scripts source their shared pid-identification helper from alongside.
+    fs.copyFileSync(path.join(root, "src", "bridge-pid.sh"), path.join(scripts, "bridge-pid.sh"));
     // Reset chains into start; give it a stub that only records the call.
     const marker = path.join(temporary, "start-marker");
     fs.writeFileSync(path.join(scripts, "tmux-start-bridge.sh"), `#!/bin/zsh\nprint started > '${marker}'\n`, { mode: 0o755 });

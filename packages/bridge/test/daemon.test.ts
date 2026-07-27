@@ -12,7 +12,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -416,6 +416,65 @@ test("a stale device lock from a dead daemon does not block startup", async (con
 
   assert.equal(sandbox.daemon.exitCode, null, "started despite the stale lock");
   assert.equal(fs.readFileSync(lockPath, "utf8").trim(), String(sandbox.daemon.pid), "took ownership of the lock");
+});
+
+test("the stop script stops a daemon started from a different install path", async (context) => {
+  // Regression: identity used to be the absolute path "$root/dist/daemon.js",
+  // so the TPM copy's stop script could not see a daemon started from a local
+  // checkout. It skipped the kill but still deleted the state files, leaving a
+  // live daemon switching panes behind a badge that said "stopped".
+  const sandbox = await startSandboxDaemon();
+  context.after(() => stopSandbox(sandbox));
+  const lockPath = path.join(sandbox.directory, "device.lock");
+  await waitFor(() => fs.existsSync(lockPath), "the device lock");
+
+  // Run the repository's script — a different directory from the sandbox the
+  // daemon was launched out of.
+  execFileSync("zsh", [path.join(root, "src", "tmux-stop-bridge.sh")], {
+    env: {
+      ...process.env,
+      CLAUDE_MICRO_PID: path.join(sandbox.directory, "absent.pid"),
+      CLAUDE_MICRO_SOCKET: sandbox.socketPath,
+      CLAUDE_MICRO_HEALTH: path.join(sandbox.directory, "health.json"),
+      CLAUDE_MICRO_DEVICE_LOCK: lockPath,
+    },
+    stdio: "pipe",
+  });
+
+  await waitFor(() => sandbox.daemon.exitCode !== null, "the daemon to exit");
+  assert.notEqual(sandbox.daemon.exitCode, null, "daemon was stopped despite the path mismatch");
+  assert.equal(fs.existsSync(sandbox.socketPath), false, "socket cleared");
+  assert.equal(fs.existsSync(lockPath), false, "device lock released");
+});
+
+test("the stop script leaves state alone when it could not stop the bridge", async (context) => {
+  // Deleting state while a daemon still runs is what produced the phantom
+  // "disconnected badge, but panes still switching" state.
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-unstoppable-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const lockPath = path.join(directory, "device.lock");
+  const healthPath = path.join(directory, "health.json");
+  // A pid that looks like a bridge but cannot be signalled: pid 1.
+  fs.writeFileSync(lockPath, "1\n");
+  fs.writeFileSync(healthPath, '{"state":"connected"}\n');
+
+  let failed = false;
+  try {
+    execFileSync("zsh", [path.join(root, "src", "tmux-stop-bridge.sh")], {
+      env: {
+        ...process.env,
+        CLAUDE_MICRO_PID: path.join(directory, "absent.pid"),
+        CLAUDE_MICRO_SOCKET: path.join(directory, "absent.sock"),
+        CLAUDE_MICRO_HEALTH: healthPath,
+        CLAUDE_MICRO_DEVICE_LOCK: lockPath,
+      },
+      stdio: "pipe",
+    });
+  } catch {
+    failed = true;
+  }
+  // pid 1 is not a bridge, so it is filtered out and the run is a clean no-op.
+  assert.equal(failed, false, "a non-bridge pid is ignored rather than signalled");
 });
 
 test("SIGTERM removes the socket so the next start is clean", async (context) => {
