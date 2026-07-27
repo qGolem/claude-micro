@@ -56,38 +56,55 @@ cross-window Agent-key focus.
 
 ## Install
 
-tmux plugin — add to your tmux config, then press **Prefix + I**:
+Four steps. No shell commands, nothing to build.
+
+**1.** Add the plugin to your tmux config:
 
 ```tmux
 set -g @plugin 'qGolem/claude-micro'
 ```
 
-The bridge needs its workspace dependencies (including the native HID module)
-once per install/update:
+**2.** Press **Prefix + I** — TPM clones the plugin.
 
-```sh
-pnpm install --dir ~/.tmux/plugins/claude-micro
-```
+**3.** Press **Prefix + V** — fetches the device driver and starts the bridge.
 
-Claude Code hooks — inside Claude Code:
+**4.** Install the Claude Code hooks, from inside Claude Code:
 
 ```
 /plugin marketplace add qGolem/claude-micro
 /plugin install claude-micro@claude-micro
 ```
 
-(For a local checkout, `/plugin marketplace add /path/to/claude-micro` works too.)
+Done — your Agent keys should light up on the next Claude Code session.
 
-Verify everything with `pnpm --dir ~/.tmux/plugins/claude-micro run doctor`.
+<details>
+<summary>What step 3 does, and how to skip it</summary>
 
-### Upgrading from the 0.1.x installer
+The bridge talks to the Micro through a compiled HID module, which can't live in
+a git repo, and TPM has no install hook. So step 3 downloads a ~230 KB prebuilt
+from this repo's [Releases](https://github.com/qGolem/claude-micro/releases),
+verifies its published SHA-256, checks it actually loads, and then starts the
+bridge. It is deliberately a keypress rather than something a config reload does
+behind your back, and it is safe to press again — it exits immediately if the
+driver is already there.
 
-The old `npm run install-plugin` flow is gone. Remove its tmux config block and
-settings.json hooks once, then install as above:
+Alternatives:
 
-```sh
-cd ~/.config/tmux/plugins/claude-micro && npm run cleanup-legacy
-```
+- `set -g @claude_micro_auto_vendor 'on'` — do it automatically on load instead.
+- `pnpm install --dir <plugin dir>` — provision it yourself from source.
+- `set -g @claude_micro_vendor_key 'off'` — drop the binding entirely.
+
+Artifacts carry signed build provenance; verify with
+`gh attestation verify claude-micro-vendor-darwin-arm64.tar.gz --repo qGolem/claude-micro`.
+
+</details>
+
+Installing from a local checkout instead of GitHub? Use
+`run-shell '/path/to/claude-micro/claude-micro.tmux'` in place of step 1, and
+`/plugin marketplace add /path/to/claude-micro` in step 4.
+
+Verify everything with **Prefix + V**'s sibling diagnostic:
+`node <plugin dir>/packages/bridge/dist/doctor.js`.
 
 ## Status module
 
@@ -109,6 +126,8 @@ Set options before the plugin line:
 ```tmux
 set -g @claude_micro_reset_key 'k'       # restart the bridge
 set -g @claude_micro_stop_key 'K'        # stop the bridge ('off' to unbind)
+set -g @claude_micro_vendor_key 'V'      # install the device driver ('off' to unbind)
+set -g @claude_micro_auto_vendor 'off'   # 'on' installs the driver on load instead
 set -g @claude_micro_slot_bindings 'on'  # Meta-1..Meta-6 focus keys
 set -g @claude_micro_auto_status 'off'   # 'on' appends the status module once
 set -g @claude_micro_node '/path/node'   # only for restricted-PATH tmux servers

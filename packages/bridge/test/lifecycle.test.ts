@@ -10,13 +10,20 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // Logging is opt-in. These drive the real start script but substitute a fake
 // node binary, so no daemon is launched and the HID device is never opened.
-for (const [name, enableLogging] of [["writes no log by default", false], ["writes a log when CLAUDE_MICRO_LOG is set", true]] as const) {
+for (const [name, enableLogging] of [
+  ["writes no log by default", false],
+  ["writes a log when CLAUDE_MICRO_LOG is set", true],
+] as const) {
   test(`tmux-start-bridge.sh ${name}`, (context) => {
-    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-logging-"));
+    const temporary = fs.mkdtempSync(
+      path.join(os.tmpdir(), "claude-micro-logging-"),
+    );
     context.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
 
     const fakeNode = path.join(temporary, "fake-node");
-    fs.writeFileSync(fakeNode, "#!/bin/sh\nprintf 'daemon output line\\n'\n", { mode: 0o755 });
+    fs.writeFileSync(fakeNode, "#!/bin/sh\nprintf 'daemon output line\\n'\n", {
+      mode: 0o755,
+    });
     const logPath = path.join(temporary, "daemon.log");
     const pidPath = path.join(temporary, "bridge.pid");
 
@@ -27,20 +34,32 @@ for (const [name, enableLogging] of [["writes no log by default", false], ["writ
         CLAUDE_MICRO_PID: pidPath,
         CLAUDE_MICRO_SOCKET: path.join(temporary, "bridge.sock"),
         CLAUDE_MICRO_HEALTH: path.join(temporary, "health.json"),
-        ...(enableLogging ? { CLAUDE_MICRO_LOG: logPath } : { CLAUDE_MICRO_LOG: "" }),
+        CLAUDE_MICRO_DEVICE_LOCK: path.join(temporary, "device.lock"),
+        ...(enableLogging
+          ? { CLAUDE_MICRO_LOG: logPath }
+          : { CLAUDE_MICRO_LOG: "" }),
       },
     });
     // The fake daemon exits immediately; give the redirection a moment to land.
     execFileSync("sleep", ["0.3"]);
 
     assert.ok(fs.existsSync(pidPath), "the launcher still records a pid");
-    assert.equal(fs.existsSync(logPath), enableLogging, enableLogging ? "log captured when asked" : "no log file created by default");
-    if (enableLogging) assert.match(fs.readFileSync(logPath, "utf8"), /daemon output line/);
+    assert.equal(
+      fs.existsSync(logPath),
+      enableLogging,
+      enableLogging
+        ? "log captured when asked"
+        : "no log file created by default",
+    );
+    if (enableLogging)
+      assert.match(fs.readFileSync(logPath, "utf8"), /daemon output line/);
   });
 }
 
 test("tmux-start-bridge.sh rotates an oversized log instead of growing it", (context) => {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-rotate-"));
+  const temporary = fs.mkdtempSync(
+    path.join(os.tmpdir(), "claude-micro-rotate-"),
+  );
   context.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
 
   const fakeNode = path.join(temporary, "fake-node");
@@ -55,13 +74,18 @@ test("tmux-start-bridge.sh rotates an oversized log instead of growing it", (con
       CLAUDE_MICRO_PID: path.join(temporary, "bridge.pid"),
       CLAUDE_MICRO_SOCKET: path.join(temporary, "bridge.sock"),
       CLAUDE_MICRO_HEALTH: path.join(temporary, "health.json"),
+      CLAUDE_MICRO_DEVICE_LOCK: path.join(temporary, "device.lock"),
       CLAUDE_MICRO_LOG: logPath,
       CLAUDE_MICRO_MAX_LOG_BYTES: "1024",
     },
   });
   execFileSync("sleep", ["0.3"]);
 
-  assert.equal(fs.readFileSync(`${logPath}.1`, "utf8").length, 5_000, "previous generation kept");
+  assert.equal(
+    fs.readFileSync(`${logPath}.1`, "utf8").length,
+    5_000,
+    "previous generation kept",
+  );
   assert.ok(fs.statSync(logPath).size < 1_000, "current log restarted small");
 });
 
@@ -71,7 +95,9 @@ test("tmux-start-bridge.sh rotates an oversized log instead of growing it", (con
 // guard entirely — a documented cleanup step could SIGTERM a bystander.
 for (const scriptName of ["tmux-reset-bridge.sh", "tmux-stop-bridge.sh"]) {
   test(`${scriptName} does not signal an unrelated process referenced by a stale PID file`, (context) => {
-    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-lifecycle-"));
+    const temporary = fs.mkdtempSync(
+      path.join(os.tmpdir(), "claude-micro-lifecycle-"),
+    );
     context.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
 
     const pluginRoot = path.join(temporary, "plugin");
@@ -81,10 +107,17 @@ for (const scriptName of ["tmux-reset-bridge.sh", "tmux-stop-bridge.sh"]) {
     fs.copyFileSync(path.join(root, "src", scriptName), script);
     fs.chmodSync(script, 0o755);
     // The scripts source their shared pid-identification helper from alongside.
-    fs.copyFileSync(path.join(root, "src", "bridge-pid.sh"), path.join(scripts, "bridge-pid.sh"));
+    fs.copyFileSync(
+      path.join(root, "src", "bridge-pid.sh"),
+      path.join(scripts, "bridge-pid.sh"),
+    );
     // Reset chains into start; give it a stub that only records the call.
     const marker = path.join(temporary, "start-marker");
-    fs.writeFileSync(path.join(scripts, "tmux-start-bridge.sh"), `#!/bin/zsh\nprint started > '${marker}'\n`, { mode: 0o755 });
+    fs.writeFileSync(
+      path.join(scripts, "tmux-start-bridge.sh"),
+      `#!/bin/zsh\nprint started > '${marker}'\n`,
+      { mode: 0o755 },
+    );
 
     const unrelated = spawn("sleep", ["30"]);
     context.after(() => unrelated.kill());
@@ -95,6 +128,7 @@ for (const scriptName of ["tmux-reset-bridge.sh", "tmux-stop-bridge.sh"]) {
       CLAUDE_MICRO_PID: pidPath,
       CLAUDE_MICRO_SOCKET: path.join(temporary, "bridge.sock"),
       CLAUDE_MICRO_HEALTH: path.join(temporary, "bridge-health.json"),
+      CLAUDE_MICRO_DEVICE_LOCK: path.join(temporary, "device.lock"),
     };
 
     execFileSync("zsh", [script], { env: environment });

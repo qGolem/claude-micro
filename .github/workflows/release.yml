@@ -1,0 +1,108 @@
+name: Release
+
+# Publishes the vendored native dependency the tmux plugin fetches on first
+# load. TPM only clones a repo — it has no install hook — so the plugin cannot
+# rely on a package manager having run. Rather than ask the user to run one, we
+# ship a small prebuilt bundle per platform and the plugin self-provisions from
+# it (the pattern tmux-thumbs and tmux-fingers use).
+#
+# The bundle is only node-hid: the codec is bundled into dist/ at build time and
+# dist/ is committed, so the native module is the sole missing piece.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish assets for (must already exist)"
+        required: true
+
+permissions:
+  contents: write
+  # Required for build provenance: the attestation is signed with a short-lived
+  # OIDC identity rather than a stored key.
+  id-token: write
+  attestations: write
+
+jobs:
+  vendor:
+    name: Vendor bundle (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: darwin-arm64
+            prebuild: HID-darwin-arm64
+          - arch: darwin-x64
+            prebuild: HID-darwin-x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Install from the lockfile so the vendored copy is exactly the version
+      # the bridge resolves against. node-hid's npm package carries prebuilds
+      # for every platform, so a Linux runner can assemble a macOS bundle.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Assemble flat bundle
+        id: assemble
+        run: |
+          set -euo pipefail
+          # pnpm's node_modules is a symlink farm into a content store, which
+          # does not survive tar. Resolve to real directories and copy.
+          source_dir="$(cd packages/bridge/node_modules/node-hid && pwd -P)"
+          version="$(node -p "require('$source_dir/package.json').version")"
+          staging="$(mktemp -d)/node_modules"
+          mkdir -p "$staging"
+          cp -R "$source_dir" "$staging/node-hid"
+          for dep in pkg-prebuilds node-addon-api; do
+            dep_dir="$(cd "packages/bridge/node_modules/node-hid/node_modules/$dep" 2>/dev/null && pwd -P)" \
+              || dep_dir="$(cd "node_modules/.pnpm/node-hid@$version/node_modules/$dep" && pwd -P)"
+            cp -R "$dep_dir" "$staging/$dep"
+          done
+
+          # Keep only the prebuild this bundle targets; the other 12 are ~5 MB
+          # of dead weight for a macOS-only plugin.
+          find "$staging/node-hid/prebuilds" -mindepth 1 -maxdepth 1 -type d \
+            ! -name '${{ matrix.prebuild }}' -exec rm -rf {} +
+          rm -rf "$staging/node-hid/src" "$staging/node-hid/hidapi"
+
+          test -f "$staging/node-hid/prebuilds/${{ matrix.prebuild }}/node-napi-v4.node" \
+            || { echo "::error::prebuild ${{ matrix.prebuild }} missing from node-hid@$version"; exit 1; }
+
+          asset="claude-micro-vendor-${{ matrix.arch }}.tar.gz"
+          tar -czf "$asset" -C "$(dirname "$staging")" node_modules
+          sha256sum "$asset" > "$asset.sha256"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+          echo "node_hid_version=$version" >> "$GITHUB_OUTPUT"
+          echo "Bundled node-hid@$version for ${{ matrix.arch }} ($(du -h "$asset" | cut -f1))"
+
+      # Signed provenance linking the artifact to this workflow run and commit,
+      # verifiable with `gh attestation verify`.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.assemble.outputs.asset }}
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            ${{ steps.assemble.outputs.asset }}
+            ${{ steps.assemble.outputs.asset }}.sha256
+          fail_on_unmatched_files: true
+          body: |
+            Vendored native dependency for the tmux plugin, fetched automatically
+            on first load. Contains node-hid@${{ steps.assemble.outputs.node_hid_version }}
+            with only the ${{ matrix.arch }} prebuild.
+
+            Verify provenance:
+            ```
+            gh attestation verify claude-micro-vendor-${{ matrix.arch }}.tar.gz --repo ${{ github.repository }}
+            ```
