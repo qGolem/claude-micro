@@ -8,11 +8,12 @@ import { findCodexMicros } from "./micro.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
+const repoRoot = path.resolve(root, "..", "..");
 const socketPath = process.env.CLAUDE_MICRO_SOCKET ?? "/private/tmp/claude-micro.sock";
 const healthPath = process.env.CLAUDE_MICRO_HEALTH ?? "/private/tmp/claude-micro-health.json";
 const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
 const installedPluginsPath = path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json");
-const entrypoint = path.join(root, "claude-micro.tmux");
+const entrypoint = path.join(repoRoot, "claude-micro.tmux");
 
 let failed = false;
 function report(ok, label, detail = "") {
@@ -30,7 +31,7 @@ try {
 const devices = findCodexMicros();
 report(devices.length > 0, "Codex Micro vendor HID interface", devices.length ? `${devices.length} detected` : "connect by USB and grant Input Monitoring");
 report(fs.existsSync(entrypoint), "tmux plugin entrypoint", entrypoint);
-report(fs.existsSync(path.join(root, "node_modules", "node-hid")), "Bridge dependencies", fs.existsSync(path.join(root, "node_modules", "node-hid")) ? "node-hid installed" : `run npm install in ${root}`);
+report(fs.existsSync(path.join(root, "node_modules", "node-hid")), "Bridge dependencies", fs.existsSync(path.join(root, "node_modules", "node-hid")) ? "node-hid installed" : `run pnpm install in ${repoRoot}`);
 
 function readJson(pathname) {
   try {

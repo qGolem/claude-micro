@@ -4,8 +4,13 @@ macOS integration for the Work Louder / OpenAI Codex Micro, Claude Code, and
 tmux: six Claude sessions get live Agent-key lighting, a frosted key focuses
 the matching tmux pane, and the Micro controls drive the active pane.
 
-Two thin plugins share this repository:
+This repository is a pnpm monorepo with two packages behind two thin plugins:
 
+- [`packages/protocol`](packages/protocol) — **codex-micro-protocol**, a pure,
+  dependency-free codec for the Codex Micro's HID RPC protocol (vendorable on
+  its own; build your own abstractions on top of it)
+- [`packages/bridge`](packages/bridge) — the macOS bridge daemon and all
+  tmux/Claude plumbing, built on the codec
 - a **tmux plugin** (TPM) that runs the HID bridge daemon
 - a **Claude Code plugin** whose hooks forward session events to the bridge
 
@@ -36,7 +41,7 @@ through tmux and iTerm.
 
 ## Requirements
 
-- macOS, Node.js 20+, tmux with [TPM](https://github.com/tmux-plugins/tpm), Claude Code, iTerm2
+- macOS, Node.js 20+, pnpm, tmux with [TPM](https://github.com/tmux-plugins/tpm), Claude Code, iTerm2
 - Wired Codex Micro, with **Input Monitoring** granted to iTerm
   (System Settings → Privacy & Security → Input Monitoring)
 
@@ -52,10 +57,11 @@ tmux plugin — add to your tmux config, then press **Prefix + I**:
 set -g @plugin 'qGolem/claude-micro'
 ```
 
-The bridge needs its native HID dependency once per install/update:
+The bridge needs its workspace dependencies (including the native HID module)
+once per install/update:
 
 ```sh
-npm install --prefix ~/.tmux/plugins/claude-micro
+pnpm install --dir ~/.tmux/plugins/claude-micro
 ```
 
 Claude Code hooks — inside Claude Code:
@@ -67,7 +73,7 @@ Claude Code hooks — inside Claude Code:
 
 (For a local checkout, `/plugin marketplace add /path/to/claude-micro` works too.)
 
-Verify everything with `npm run doctor --prefix ~/.tmux/plugins/claude-micro`.
+Verify everything with `pnpm --dir ~/.tmux/plugins/claude-micro run doctor`.
 
 ### Upgrading from the 0.1.x installer
 
@@ -120,7 +126,7 @@ Code's ordinary "waiting for your input" notification.
 
 ## Diagnostics
 
-`npm run doctor` checks Node, tmux, the vendor HID interface, dependencies,
+`pnpm run doctor` checks Node, tmux, the vendor HID interface, dependencies,
 the Claude Code plugin, the bridge health record, and socket reachability.
 The bridge retries automatically on device reconnect and restores
 session-to-key assignments after a restart. For temporary protocol traces,
@@ -135,8 +141,11 @@ Claude Code. Restart tmux to clear loaded key bindings.
 ## Development
 
 ```sh
-npm run verify   # syntax checks + tests
-npm start        # run the bridge in the foreground
+pnpm install
+pnpm run verify   # syntax checks + tests in every package
+pnpm start        # run the bridge in the foreground
 ```
 
-GitHub Actions runs the same verification on macOS runners with Node 20 and 22.
+The protocol codec's tests run under `bun test` (Bun required for
+development); the bridge's tests run under `node --test`. GitHub Actions runs
+the same verification on macOS runners with Node 20 and 22.

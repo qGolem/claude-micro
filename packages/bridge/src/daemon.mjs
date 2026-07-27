@@ -2,8 +2,18 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import {
+  AGENT_KEY_COUNT,
+  ENCODER_KEY_NAMES,
+  JoystickFlickDetector,
+  RpcMessageStream,
+  RpcMethod,
+  parseDeviceEvent,
+  rpcPayloadFromPacket,
+} from "codex-micro-protocol";
 import { CodexMicro } from "./micro.mjs";
 import { SessionSlots, stateForHook } from "./state.mjs";
+import { agentKeyLightingForState } from "./status-lighting.mjs";
 
 const socketPath = process.env.CLAUDE_MICRO_SOCKET ?? "/private/tmp/claude-micro.sock";
 const slotsPath = process.env.CLAUDE_MICRO_SLOTS ?? "/private/tmp/claude-micro-slots.json";
@@ -59,10 +69,10 @@ function restoredSlotState() {
 
 const storedSlots = restoredSlotState();
 const slots = new SessionSlots(storedSlots.map(({ sessionId, id }) => ({ sessionId, slot: id })));
-const agentStates = Array(6).fill("idle");
-const agentPanes = Array(6).fill(null);
+const agentStates = Array(AGENT_KEY_COUNT).fill("idle");
+const agentPanes = Array(AGENT_KEY_COUNT).fill(null);
 for (const record of storedSlots) {
-  if (!Number.isInteger(record?.id) || record.id < 0 || record.id > 5 || typeof record?.sessionId !== "string") continue;
+  if (!Number.isInteger(record?.id) || record.id < 0 || record.id >= AGENT_KEY_COUNT || typeof record?.sessionId !== "string") continue;
   agentStates[record.id] = typeof record.state === "string" ? record.state : "idle";
   agentPanes[record.id] = typeof record.tmuxPane === "string" ? record.tmuxPane : null;
 }
@@ -108,6 +118,10 @@ async function reconnectMicro() {
   }
 }
 
+function agentKeyLightingSnapshot() {
+  return agentStates.map((state, agentKeyIndex) => agentKeyLightingForState(agentKeyIndex, state));
+}
+
 async function refreshAgentKeys() {
   if (refreshing) return;
   if (reconnecting) return;
@@ -116,7 +130,7 @@ async function refreshAgentKeys() {
     // ChatGPT Codex can also publish an idle state. Refreshing only the
     // per-thread channel lets Claude own the Agent LEDs without changing the
     // Input layer or the frame/background RGB configuration.
-    await micro.setThreadStates(agentStates);
+    await micro.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot());
     writeHealth("connected");
   } catch (error) {
     console.error(`Claude Micro refresh failed: ${error.message}`);
@@ -284,63 +298,53 @@ const commandKeyActions = {
   ACT12: () => sendToActivePane("C-c"),
 };
 
-// Encoder turns use the same custom HID channel as key presses, but firmware
-// labels the turn action as 2 rather than a normal press (1). On this unit,
-// the physical left turn reports ENC_CW and the physical right turn ENC_CC.
+// On this unit, the physical left turn reports ENC_CW and the right turn
+// ENC_CC; the bindings below give left turn → Left arrow.
 const encoderActions = {
-  ENC_CW: () => sendToActivePane("Left"),
-  ENC_CC: () => sendToActivePane("Right"),
+  [ENCODER_KEY_NAMES.clockwise]: () => sendToActivePane("Left"),
+  [ENCODER_KEY_NAMES.counterClockwise]: () => sendToActivePane("Right"),
 };
 
-let joystickLatched = false;
-function handleJoystickMove(position) {
-  const angle = Number(position?.a);
-  const distance = Number(position?.d);
-  if (!Number.isFinite(angle) || !Number.isFinite(distance)) return;
-  // The Micro reports a continuous radial stream. Send only once per full
-  // flick, then re-arm after the stick returns near its center.
-  if (distance < 0.2) {
-    joystickLatched = false;
+const tmuxKeyByJoystickDirection = { right: "Right", down: "Down", left: "Left", up: "Up" };
+// The Micro reports a continuous radial stream; the detector emits one
+// direction per full flick and re-arms near center.
+const joystickFlickDetector = new JoystickFlickDetector({ triggerDistance: 0.8, rearmDistance: 0.2 });
+
+const utf8Decoder = new TextDecoder();
+const messageStream = new RpcMessageStream();
+
+function handleDeviceMessage(message) {
+  const deviceEvent = parseDeviceEvent(message);
+  // Responses to our own lighting requests share the channel; nothing to do.
+  if (!deviceEvent || deviceEvent.kind === "unrecognized") return;
+  if (deviceEvent.kind === "keyEvent") {
+    const { keyName, action, agentKeyIndex } = deviceEvent;
+    if (action === "press") debugLog("hid-keys.log", `${JSON.stringify(message.raw)}\n`);
+    if (agentKeyIndex !== null && action === "press") beginAgentKeyPress(agentKeyIndex);
+    if (agentKeyIndex !== null && action === "release") cancelAgentKeyHold(agentKeyIndex);
+    if (action === "press" && commandKeyActions[keyName]) void commandKeyActions[keyName]();
+    if (action === "encoderTurn" && encoderActions[keyName]) void encoderActions[keyName]();
     return;
   }
-  if (joystickLatched || distance < 0.8) return;
-  joystickLatched = true;
-  // 0 = right, .25 = down, .5 = left, .75 = up.
-  const direction = ["Right", "Down", "Left", "Up"][Math.round((angle % 1) * 4) % 4];
-  if (direction) void sendToActivePane(direction);
+  if (deviceEvent.kind === "joystickSample") {
+    const direction = joystickFlickDetector.update(deviceEvent);
+    if (direction) void sendToActivePane(tmuxKeyByJoystickDirection[direction]);
+  }
 }
 
-let hidBuffer = "";
 function attachInput(handle) {
   handle.onInput((report) => {
-  const data = Buffer.from(report);
-  // Raw protocol traces are useful for discovering firmware controls, but are
-  // deliberately opt-in so a normal bridge never accumulates device data.
-  const payloadText = data[1] === 2 ? data.subarray(3, 3 + data[2]).toString("utf8") : "";
-  if (!payloadText.includes('"method":"v.oai.thstatus"')) {
-    debugLog("hid-raw.log", `${Date.now()} ${data.toString("hex")}\n`);
-  }
-  if (data[1] !== 2 || data[2] === 0) return;
-  hidBuffer += data.subarray(3, 3 + data[2]).toString("utf8");
-  const lines = hidBuffer.split(/\r?\n/);
-  hidBuffer = lines.pop() ?? "";
-  for (const line of lines) {
-    try {
-      const message = JSON.parse(line);
-      const key = message?.m === "v.oai.hid" ? message.p?.k : null;
-      if (message?.m === "v.oai.hid" && message?.p?.act === 1) {
-        debugLog("hid-keys.log", `${JSON.stringify(message)}\n`);
+    const reportBytes = new Uint8Array(report);
+    // Raw protocol traces are useful for discovering firmware controls, but are
+    // deliberately opt-in so a normal bridge never accumulates device data.
+    if (debugDir) {
+      const rpcPayload = rpcPayloadFromPacket(reportBytes);
+      const payloadText = rpcPayload ? utf8Decoder.decode(rpcPayload) : "";
+      if (!payloadText.includes(`"method":"${RpcMethod.agentKeyStatus}"`)) {
+        debugLog("hid-raw.log", `${Date.now()} ${Buffer.from(reportBytes).toString("hex")}\n`);
       }
-      const agentSlot = /^AG0[0-5]$/.test(key ?? "") ? Number(key.slice(2)) : null;
-      if (agentSlot !== null && message?.p?.act === 1) beginAgentKeyPress(agentSlot);
-      if (agentSlot !== null && message?.p?.act === 0) cancelAgentKeyHold(agentSlot);
-      if (message?.p?.act === 1 && commandKeyActions[key]) void commandKeyActions[key]();
-      if (message?.p?.act === 2 && encoderActions[key]) void encoderActions[key]();
-      if (message?.m === "v.oai.rad") handleJoystickMove(message.p);
-    } catch {
-      // Responses from normal lighting RPCs share this channel; ignore them.
     }
-  }
+    for (const message of messageStream.pushHidPacket(reportBytes)) handleDeviceMessage(message);
   });
 }
 attachInput(micro);
@@ -405,7 +409,10 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     server.close();
     clearInterval(refreshTimer);
     try {
-      await micro.setAllIdle();
+      await micro.sendRequest(
+        RpcMethod.agentKeyStatus,
+        agentStates.map((_state, agentKeyIndex) => agentKeyLightingForState(agentKeyIndex, "idle")),
+      );
       await micro.close();
     } catch {
       // A USB reset can invalidate the handle while shutting down.

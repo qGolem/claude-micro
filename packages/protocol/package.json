@@ -1,0 +1,28 @@
+{
+  "name": "codex-micro-protocol",
+  "version": "0.1.0",
+  "description": "Pure, dependency-free codec for the Work Louder Codex Micro vendor HID RPC protocol: framing, RPC envelopes, lighting payloads, and input-event parsing.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "for source in src/*.mjs; do node --check \"$source\" || exit 1; done",
+    "test": "bun test"
+  },
+  "keywords": [
+    "codex-micro",
+    "work-louder",
+    "hid",
+    "protocol",
+    "codec"
+  ]
+}

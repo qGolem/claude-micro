@@ -1,49 +1,18 @@
 {
-  "name": "claude-micro-bridge",
+  "name": "claude-micro",
   "private": true,
-  "version": "0.2.0",
-  "description": "macOS tmux bridge for the Work Louder Codex Micro and Claude Code.",
+  "version": "0.3.0",
+  "description": "macOS tmux bridge for the Work Louder Codex Micro and Claude Code — pnpm monorepo.",
+  "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": ">=20"
   },
-  "files": [
-    ".claude-plugin/plugin.json",
-    ".claude-plugin/marketplace.json",
-    "claude-micro.tmux",
-    "docs/codex-micro.svg",
-    "hooks/hooks.json",
-    "src/cleanup-legacy.mjs",
-    "src/daemon.mjs",
-    "src/doctor.mjs",
-    "src/event.mjs",
-    "src/focus-slot.mjs",
-    "src/micro.mjs",
-    "src/protocol.mjs",
-    "src/state.mjs",
-    "src/tmux-reset-bridge.sh",
-    "src/tmux-start-bridge.sh",
-    "src/tmux-status.mjs",
-    "src/tmux-stop-bridge.sh",
-    "README.md"
-  ],
-  "keywords": [
-    "claude-code",
-    "tmux",
-    "codex-micro",
-    "work-louder",
-    "macos"
-  ],
-  "type": "module",
   "scripts": {
-    "start": "node src/daemon.mjs",
-    "event": "node src/event.mjs",
-    "cleanup-legacy": "node src/cleanup-legacy.mjs",
-    "doctor": "node src/doctor.mjs",
-    "check": "node --check src/*.mjs && bash -n claude-micro.tmux && zsh -n src/tmux-*.sh",
-    "verify": "npm run check && npm test",
-    "test": "node --test"
-  },
-  "dependencies": {
-    "node-hid": "^3.2.0"
+    "check": "bash -n claude-micro.tmux && pnpm --recursive run check",
+    "test": "pnpm --recursive run test",
+    "verify": "pnpm run check && pnpm run test",
+    "doctor": "node packages/bridge/src/doctor.mjs",
+    "start": "node packages/bridge/src/daemon.mjs",
+    "cleanup-legacy": "node packages/bridge/src/cleanup-legacy.mjs"
   }
 }

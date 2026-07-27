@@ -24,7 +24,7 @@ if [[ -f "$pid_file" ]]; then
 fi
 
 if [[ ! -d "$root/node_modules/node-hid" ]]; then
-  print -u2 "claude-micro: dependencies missing; run 'npm install' in $root"
+  print -u2 "claude-micro: dependencies missing; run 'pnpm install' in ${root:h:h}"
   exit 1
 fi
 

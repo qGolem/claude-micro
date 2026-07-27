@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/packages/bridge/src/event.mjs\"",
             "timeout": 10
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/packages/bridge/src/event.mjs\"",
             "timeout": 10
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/packages/bridge/src/event.mjs\"",
             "timeout": 10
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/packages/bridge/src/event.mjs\"",
             "timeout": 10
           }
         ]
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/packages/bridge/src/event.mjs\"",
             "timeout": 10
           }
         ]
@@ -62,7 +62,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/packages/bridge/src/event.mjs\"",
             "timeout": 10
           }
         ]
@@ -73,7 +73,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/packages/bridge/src/event.mjs\"",
             "timeout": 10
           }
         ]
@@ -84,7 +84,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/packages/bridge/src/event.mjs\"",
             "timeout": 10
           }
         ]

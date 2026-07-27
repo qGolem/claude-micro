@@ -8,9 +8,10 @@ import test from "node:test";
 import { stateForHook } from "../src/state.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const hooksConfig = JSON.parse(fs.readFileSync(path.join(root, "hooks", "hooks.json"), "utf8"));
-const manifest = JSON.parse(fs.readFileSync(path.join(root, ".claude-plugin", "plugin.json"), "utf8"));
-const marketplace = JSON.parse(fs.readFileSync(path.join(root, ".claude-plugin", "marketplace.json"), "utf8"));
+const repoRoot = path.resolve(root, "..", "..");
+const hooksConfig = JSON.parse(fs.readFileSync(path.join(repoRoot, "hooks", "hooks.json"), "utf8"));
+const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude-plugin", "plugin.json"), "utf8"));
+const marketplace = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude-plugin", "marketplace.json"), "utf8"));
 
 test("hooks.json forwards every lifecycle event the bridge maps to a key state", () => {
   const expected = [
@@ -30,7 +31,7 @@ test("hooks.json forwards every lifecycle event the bridge maps to a key state",
     const [group] = groups;
     for (const hook of group.hooks) {
       assert.equal(hook.type, "command");
-      assert.match(hook.command, /\$\{CLAUDE_PLUGIN_ROOT\}\/src\/event\.mjs/, `${event} runs event.mjs via CLAUDE_PLUGIN_ROOT`);
+      assert.match(hook.command, /\$\{CLAUDE_PLUGIN_ROOT\}\/packages\/bridge\/src\/event\.mjs/, `${event} runs event.mjs via CLAUDE_PLUGIN_ROOT`);
     }
     // Every forwarded event must resolve to a lighting state in the daemon.
     const sample = { hook_event_name: event, ...(event === "PreToolUse" ? { tool_name: "AskUserQuestion" } : {}) };
@@ -50,7 +51,7 @@ test("plugin manifest and marketplace entry agree", () => {
 });
 
 test("tmux entrypoint lives at the repository root and is executable", () => {
-  const entrypoint = path.join(root, "claude-micro.tmux");
+  const entrypoint = path.join(repoRoot, "claude-micro.tmux");
   assert.ok(fs.statSync(entrypoint).mode & 0o111);
 });
 
