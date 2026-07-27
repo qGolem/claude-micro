@@ -239,7 +239,12 @@ test("holding an agent key clears its slot; a tap does not", async (context) => 
   persisted = JSON.parse(fs.readFileSync(sandbox.slotsPath, "utf8"));
   assert.equal(persisted.slots[0].state, "idle");
   assert.equal(persisted.slots[0].tmuxPane, null);
-  assert.match(fs.readFileSync(sandbox.tmuxLogPath, "utf8"), /cleared Agent Key 1/);
+  // The daemon persists the slot before it tells tmux, so the log can lag the
+  // slots file — poll rather than assert once.
+  await waitFor(
+    () => /cleared Agent Key 1/.test(fs.readFileSync(sandbox.tmuxLogPath, "utf8")),
+    "the clear notice to reach the tmux log",
+  );
 });
 
 test("refuses to start when another bridge already owns the socket", async (context) => {
