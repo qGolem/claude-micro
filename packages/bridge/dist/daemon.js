@@ -123,6 +123,7 @@ var agentHoldMs = Number(process.env.CLAUDE_MICRO_AGENT_HOLD_MS ?? 3e3);
 var deviceTimeoutMs = Number(process.env.CLAUDE_MICRO_DEVICE_TIMEOUT_MS ?? 2e3);
 var maxDebugFileBytes = Number(process.env.CLAUDE_MICRO_MAX_DEBUG_BYTES ?? 64 * 1024 * 1024);
 var slotStaleMs = Number(process.env.CLAUDE_MICRO_SLOT_STALE_MS ?? 12 * 60 * 60 * 1e3);
+var maxReconnectBackoffMs = Number(process.env.CLAUDE_MICRO_MAX_RECONNECT_BACKOFF_MS ?? 3e4);
 function removeSocket() {
   try {
     const stat = fs.lstatSync(socketPath);
@@ -325,6 +326,8 @@ var micro = null;
 var refreshing = false;
 var reconnecting = false;
 var refreshInFlight = null;
+var consecutiveDeviceFailures = 0;
+var nextReconnectAllowedAt = 0;
 try {
   micro = await CodexMicro.connect();
   writeHealth("connected", true);
@@ -355,7 +358,7 @@ async function reconnectMicro() {
         messageStream.reset();
         attachInput(micro);
         writeHealth("connected", true);
-        console.log("Claude Micro reconnected.");
+        reportRepeating("Claude Micro reconnected.");
         return;
       } catch {
         await sleep(500);
@@ -380,11 +383,19 @@ async function refreshAgentKeys() {
     const write = handle.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot());
     refreshInFlight = write;
     await withDeviceTimeout(write, "agent-key refresh");
+    consecutiveDeviceFailures = 0;
+    nextReconnectAllowedAt = 0;
     writeHealth("connected");
   } catch (error) {
     reportRepeating(`Claude Micro refresh failed: ${error.message}`);
     writeHealth("reconnecting", true);
-    void reconnectMicro();
+    const now = Date.now();
+    if (now >= nextReconnectAllowedAt) {
+      consecutiveDeviceFailures += 1;
+      const backoffMs = Math.min(maxReconnectBackoffMs, 500 * 2 ** Math.min(consecutiveDeviceFailures - 1, 6));
+      nextReconnectAllowedAt = now + backoffMs;
+      void reconnectMicro();
+    }
   } finally {
     refreshInFlight = null;
     refreshing = false;

@@ -118,20 +118,30 @@ set -g @claude_micro_node '/path/node'   # only for restricted-PATH tmux servers
 HID device (it confirms with a tmux message). Starting it again is
 Prefix + k, or any new tmux server.
 
-## Log retention
+## Logging
 
-Every file the bridge writes is bounded, so nothing grows forever:
+**Nothing is logged by default.** Health state is visible without it — in the
+status badge and the health file — so a normal install writes no log at all.
+Each sink is enabled by pointing an environment variable at a path, and each is
+bounded once enabled:
 
-| File | Limit | Override |
+| Enable with | Contents | Limit |
 | --- | --- | --- |
-| `claude-micro.log` (daemon stdout) | rotates to `.log.1` past 8 MiB, at each start | `CLAUDE_MICRO_MAX_LOG_BYTES` |
-| `CLAUDE_MICRO_DEBUG_DIR` traces | 64 MiB per file, then stops | `CLAUDE_MICRO_MAX_DEBUG_BYTES` |
-| `CLAUDE_MICRO_LATENCY_LOG` | 64 MiB, then stops | `CLAUDE_MICRO_MAX_DEBUG_BYTES` |
-| `CLAUDE_MICRO_HOOK_AUDIT` | 16 MiB, then stops | `CLAUDE_MICRO_MAX_AUDIT_BYTES` |
+| `CLAUDE_MICRO_LOG` | daemon stdout/stderr | rotates to `.1` past 8 MiB at each start (`CLAUDE_MICRO_MAX_LOG_BYTES`) |
+| `CLAUDE_MICRO_DEBUG_DIR` | raw HID and key traces | 64 MiB per file, then stops (`CLAUDE_MICRO_MAX_DEBUG_BYTES`) |
+| `CLAUDE_MICRO_LATENCY_LOG` | Agent-key focus timings | 64 MiB, then stops |
+| `CLAUDE_MICRO_HOOK_AUDIT` | hook lifecycle trail (never prompt text) | 16 MiB, then stops (`CLAUDE_MICRO_MAX_AUDIT_BYTES`) |
 
-Only the daemon log is written by default; the other three are opt-in. Repeated
-identical daemon errors (a disconnected device retries every 75 ms) collapse
-into one line per minute with a suppressed-count suffix.
+To capture daemon output while debugging:
+
+```tmux
+set-environment -g CLAUDE_MICRO_LOG /private/tmp/claude-micro.log
+```
+
+then **Prefix + K**, **Prefix + k**. Repeated identical messages collapse to one
+line per minute with a `(repeated Nx)` suffix, and reconnect attempts back off
+exponentially to 30 s — so even a permanently broken device produces a few
+lines per minute rather than hundreds.
 
 ## Controls
 

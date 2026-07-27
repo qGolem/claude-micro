@@ -8,6 +8,63 @@ import test from "node:test";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+// Logging is opt-in. These drive the real start script but substitute a fake
+// node binary, so no daemon is launched and the HID device is never opened.
+for (const [name, enableLogging] of [["writes no log by default", false], ["writes a log when CLAUDE_MICRO_LOG is set", true]] as const) {
+  test(`tmux-start-bridge.sh ${name}`, (context) => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-logging-"));
+    context.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+
+    const fakeNode = path.join(temporary, "fake-node");
+    fs.writeFileSync(fakeNode, "#!/bin/sh\nprintf 'daemon output line\\n'\n", { mode: 0o755 });
+    const logPath = path.join(temporary, "daemon.log");
+    const pidPath = path.join(temporary, "bridge.pid");
+
+    execFileSync("zsh", [path.join(root, "src", "tmux-start-bridge.sh")], {
+      env: {
+        ...process.env,
+        CLAUDE_MICRO_NODE: fakeNode,
+        CLAUDE_MICRO_PID: pidPath,
+        CLAUDE_MICRO_SOCKET: path.join(temporary, "bridge.sock"),
+        CLAUDE_MICRO_HEALTH: path.join(temporary, "health.json"),
+        ...(enableLogging ? { CLAUDE_MICRO_LOG: logPath } : { CLAUDE_MICRO_LOG: "" }),
+      },
+    });
+    // The fake daemon exits immediately; give the redirection a moment to land.
+    execFileSync("sleep", ["0.3"]);
+
+    assert.ok(fs.existsSync(pidPath), "the launcher still records a pid");
+    assert.equal(fs.existsSync(logPath), enableLogging, enableLogging ? "log captured when asked" : "no log file created by default");
+    if (enableLogging) assert.match(fs.readFileSync(logPath, "utf8"), /daemon output line/);
+  });
+}
+
+test("tmux-start-bridge.sh rotates an oversized log instead of growing it", (context) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "claude-micro-rotate-"));
+  context.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+
+  const fakeNode = path.join(temporary, "fake-node");
+  fs.writeFileSync(fakeNode, "#!/bin/sh\nprintf 'fresh\\n'\n", { mode: 0o755 });
+  const logPath = path.join(temporary, "daemon.log");
+  fs.writeFileSync(logPath, "x".repeat(5_000));
+
+  execFileSync("zsh", [path.join(root, "src", "tmux-start-bridge.sh")], {
+    env: {
+      ...process.env,
+      CLAUDE_MICRO_NODE: fakeNode,
+      CLAUDE_MICRO_PID: path.join(temporary, "bridge.pid"),
+      CLAUDE_MICRO_SOCKET: path.join(temporary, "bridge.sock"),
+      CLAUDE_MICRO_HEALTH: path.join(temporary, "health.json"),
+      CLAUDE_MICRO_LOG: logPath,
+      CLAUDE_MICRO_MAX_LOG_BYTES: "1024",
+    },
+  });
+  execFileSync("sleep", ["0.3"]);
+
+  assert.equal(fs.readFileSync(`${logPath}.1`, "utf8").length, 5_000, "previous generation kept");
+  assert.ok(fs.statSync(logPath).size < 1_000, "current log restarted small");
+});
+
 // Every script that reads the pid file must verify the process is actually
 // this bridge before signalling it: pid files go stale on crash/reboot and
 // PIDs are reused. Previously only reset was covered, and stop lacked the

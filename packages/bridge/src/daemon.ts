@@ -33,6 +33,8 @@ const maxDebugFileBytes = Number(process.env.CLAUDE_MICRO_MAX_DEBUG_BYTES ?? 64 
 // A session that dies without its SessionEnd hook would otherwise hold its key
 // forever; assignments older than this are evictable when all six are taken.
 const slotStaleMs = Number(process.env.CLAUDE_MICRO_SLOT_STALE_MS ?? 12 * 60 * 60 * 1_000);
+// Ceiling for the exponential backoff between reconnect attempts.
+const maxReconnectBackoffMs = Number(process.env.CLAUDE_MICRO_MAX_RECONNECT_BACKOFF_MS ?? 30_000);
 
 function removeSocket(): void {
   try {
@@ -281,6 +283,8 @@ let micro: CodexMicro | null = null;
 let refreshing = false;
 let reconnecting = false;
 let refreshInFlight: Promise<unknown> | null = null;
+let consecutiveDeviceFailures = 0;
+let nextReconnectAllowedAt = 0;
 
 try {
   micro = await CodexMicro.connect();
@@ -322,7 +326,9 @@ async function reconnectMicro(): Promise<void> {
         messageStream.reset();
         attachInput(micro);
         writeHealth("connected", true);
-        console.log("Claude Micro reconnected.");
+        // Throttled: a device that connects but refuses writes would otherwise
+        // announce a "reconnect" on every retry.
+        reportRepeating("Claude Micro reconnected.");
         return;
       } catch {
         await sleep(500);
@@ -352,11 +358,24 @@ async function refreshAgentKeys(): Promise<void> {
     const write = handle.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot());
     refreshInFlight = write;
     await withDeviceTimeout(write, "agent-key refresh");
+    consecutiveDeviceFailures = 0;
+    nextReconnectAllowedAt = 0;
     writeHealth("connected");
   } catch (error) {
     reportRepeating(`Claude Micro refresh failed: ${(error as Error).message}`);
     writeHealth("reconnecting", true);
-    void reconnectMicro();
+    // Back off. The refresh loop runs every 75 ms, so reconnecting on every
+    // failure means hammering the USB device ~13 times a second — which burns
+    // CPU, floods the log, and makes a marginal device worse rather than
+    // better. Delay doubles per consecutive failure up to 30 s, and resets the
+    // moment a write succeeds.
+    const now = Date.now();
+    if (now >= nextReconnectAllowedAt) {
+      consecutiveDeviceFailures += 1;
+      const backoffMs = Math.min(maxReconnectBackoffMs, 500 * 2 ** Math.min(consecutiveDeviceFailures - 1, 6));
+      nextReconnectAllowedAt = now + backoffMs;
+      void reconnectMicro();
+    }
   } finally {
     refreshInFlight = null;
     refreshing = false;
