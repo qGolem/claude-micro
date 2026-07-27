@@ -8,6 +8,10 @@ macOS integration for the Work Louder / OpenAI Codex Micro, Claude Code, and
 tmux: six Claude sessions get live Agent-key lighting, a frosted key focuses
 the matching tmux pane, and the Micro controls drive the active pane.
 
+<p align="center">
+  <img src="docs/codex-micro.jpeg" alt="Codex Micro macropad, its six frosted agent keys lit in different colors" width="480">
+</p>
+
 This repository is a pnpm monorepo with two packages behind two thin plugins:
 
 - [`packages/protocol`](packages/protocol) — **codex-micro-protocol**, a pure,
