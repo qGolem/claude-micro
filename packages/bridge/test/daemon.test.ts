@@ -247,6 +247,63 @@ test("holding an agent key clears its slot; a tap does not", async (context) => 
   );
 });
 
+test("a session resumed under a new id inherits its pane's key instead of leaking one", async (context) => {
+  const sandbox = await startSandboxDaemon();
+  context.after(() => stopSandbox(sandbox));
+
+  const first = JSON.parse(await sendHook(sandbox.socketPath, { hook_event_name: "UserPromptSubmit", session_id: "incarnation-1", tmux_pane: "%1" }));
+  assert.equal(first.slot, 0);
+
+  // A resume mints a fresh session_id but lands in the same pane. It must take
+  // over key 1, not light key 2 while key 1 stays stuck on the dead session.
+  const second = JSON.parse(await sendHook(sandbox.socketPath, { hook_event_name: "UserPromptSubmit", session_id: "incarnation-2", tmux_pane: "%1" }));
+  assert.equal(second.slot, 0, "the new incarnation inherits the same key");
+
+  const persisted = JSON.parse(fs.readFileSync(sandbox.slotsPath, "utf8"));
+  assert.equal(persisted.slots[0].sessionId, "incarnation-2");
+  const assigned = persisted.slots.filter((slot: { sessionId: string | null }) => slot.sessionId !== null);
+  assert.equal(assigned.length, 1, "the abandoned incarnation holds no key");
+});
+
+test("tool traffic and completions in a shared pane do not steal the key", async (context) => {
+  const sandbox = await startSandboxDaemon();
+  context.after(() => stopSandbox(sandbox));
+
+  const owner = JSON.parse(await sendHook(sandbox.socketPath, { hook_event_name: "UserPromptSubmit", session_id: "owner", tmux_pane: "%1" }));
+  assert.equal(owner.slot, 0);
+
+  // Only SessionStart and UserPromptSubmit assert pane ownership. A background
+  // session's tool activity or completion in the same pane gets its own key —
+  // stealing on every event would let two live sessions flap one key.
+  for (const hook_event_name of ["PostToolUse", "Stop"]) {
+    const bystander = JSON.parse(await sendHook(sandbox.socketPath, { hook_event_name, session_id: "bystander", tmux_pane: "%1" }));
+    assert.equal(bystander.slot, 1, `${hook_event_name} does not take over`);
+  }
+
+  const persisted = JSON.parse(fs.readFileSync(sandbox.slotsPath, "utf8"));
+  assert.equal(persisted.slots[0].sessionId, "owner", "the pane owner keeps its key");
+});
+
+test("a hold-cleared slot is fully free: same session may return, others may claim it", async (context) => {
+  const sandbox = await startSandboxDaemon();
+  context.after(() => stopSandbox(sandbox));
+
+  await sendHook(sandbox.socketPath, { hook_event_name: "UserPromptSubmit", session_id: "cleared", tmux_pane: "%1" });
+  sandbox.daemon.stdin.write(`${hidReport({ m: "v.oai.hid", p: { k: "AG00", act: 1 } })}\n`);
+  await waitFor(() => {
+    const current = JSON.parse(fs.readFileSync(sandbox.slotsPath, "utf8"));
+    return current.slots[0].sessionId === null;
+  }, "the long press to clear the slot");
+
+  // The clear must leave nothing behind: a different session claims the freed
+  // key, and the cleared session — if actually still alive — re-registers on
+  // its next event rather than resurrecting stale state.
+  const newcomer = JSON.parse(await sendHook(sandbox.socketPath, { hook_event_name: "SessionStart", session_id: "newcomer", tmux_pane: "%2" }));
+  assert.equal(newcomer.slot, 0, "a cleared key is claimable immediately");
+  const returned = JSON.parse(await sendHook(sandbox.socketPath, { hook_event_name: "UserPromptSubmit", session_id: "cleared", tmux_pane: "%1" }));
+  assert.equal(returned.slot, 1, "the cleared session re-registers fresh on new activity");
+});
+
 test("refuses to start when another bridge already owns the socket", async (context) => {
   // Regression test: the daemon used to unlink the socket blind, orphaning a
   // running bridge that kept driving the device while becoming unreachable.

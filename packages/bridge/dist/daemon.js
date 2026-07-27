@@ -614,6 +614,18 @@ var server = net.createServer({ allowHalfOpen: true }, (connection) => {
       if (!state || typeof sessionId !== "string" || !sessionId) {
         throw new Error("Hook event did not include a supported state and session_id.");
       }
+      const eventPane = typeof event.tmux_pane === "string" && event.tmux_pane ? event.tmux_pane : null;
+      const eventName = event.hook_event_name;
+      if (eventPane && (eventName === "SessionStart" || eventName === "UserPromptSubmit")) {
+        for (const other of slots.entries()) {
+          if (other.sessionId !== sessionId && agentPanes[other.slot] === eventPane) {
+            cancelAgentKeyHold(other.slot);
+            slots.release(other.sessionId);
+            agentStates[other.slot] = "idle";
+            agentPanes[other.slot] = null;
+          }
+        }
+      }
       const slot = slots.acquire(sessionId);
       agentStates[slot] = state;
       if (typeof event.tmux_pane === "string" && event.tmux_pane) {

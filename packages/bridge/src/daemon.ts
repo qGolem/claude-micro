@@ -652,6 +652,27 @@ const server = net.createServer({ allowHalfOpen: true }, (connection) => {
       if (!state || typeof sessionId !== "string" || !sessionId) {
         throw new Error("Hook event did not include a supported state and session_id.");
       }
+      // One pane, one key: resuming a conversation mints a fresh session_id,
+      // so without this rule every resume of the same tab leaks another key,
+      // stuck forever on its last state. A session starting or taking a user
+      // prompt in a pane is that pane's foreground occupant, and supersedes
+      // whatever session was recorded there. Restricted to those two events
+      // on purpose — tool traffic must not steal, and a subagent's hooks
+      // carry the parent's session_id, so it can never look like a rival.
+      const eventPane = typeof event.tmux_pane === "string" && event.tmux_pane ? event.tmux_pane : null;
+      const eventName = event.hook_event_name;
+      if (eventPane && (eventName === "SessionStart" || eventName === "UserPromptSubmit")) {
+        for (const other of slots.entries()) {
+          if (other.sessionId !== sessionId && agentPanes[other.slot] === eventPane) {
+            // Released before acquire, so the newcomer inherits the same key
+            // instead of lighting a second one for the same pane.
+            cancelAgentKeyHold(other.slot);
+            slots.release(other.sessionId);
+            agentStates[other.slot] = "idle";
+            agentPanes[other.slot] = null;
+          }
+        }
+      }
       const slot = slots.acquire(sessionId);
       agentStates[slot] = state;
       if (typeof event.tmux_pane === "string" && event.tmux_pane) {
