@@ -154,9 +154,10 @@ export function agentKeyStatusParams(encodedEntries: AgentKeyLightingWire[]): Ag
     if (seenIndexes.has(entry.id)) throw new RangeError(`agent key ${entry.id} appears more than once.`);
     seenIndexes.add(entry.id);
   }
-  // Return a copy so post-validation mutation of the caller's array cannot
-  // bypass the checks (mirrors lightingConfigParams building a fresh object).
-  return [...encodedEntries];
+  // Copy the entries themselves, not just the array: a caller holding a
+  // reference (e.g. reusing one entry object across animation frames) could
+  // otherwise mutate validated values onto the wire.
+  return encodedEntries.map((entry) => ({ ...entry }));
 }
 
 /**
@@ -180,7 +181,21 @@ export function lightingConfigParams({ keys, ambient }: LightingConfigWire): Lig
     throw new TypeError("lightingConfigParams needs at least one of keys/ambient.");
   }
   const params: LightingConfigWire = {};
-  if (keys !== undefined) params.keys = keys;
-  if (ambient !== undefined) params.ambient = ambient;
+  // Re-validate even though the channels are meant to come from
+  // encodeLightingChannel — the wire types are plain numbers, so nothing but
+  // this check stops out-of-range values reaching the firmware.
+  if (keys !== undefined) params.keys = validatedChannel(keys, "keys");
+  if (ambient !== undefined) params.ambient = validatedChannel(ambient, "ambient");
   return params;
+}
+
+function validatedChannel(channel: LightingChannelWire, channelName: string): LightingChannelWire {
+  assertRgbColor(channel?.c, `${channelName}.color`);
+  assertUnitInterval(channel.b, `${channelName}.brightness`);
+  assertLightingEffect(channel.e);
+  assertUnitInterval(channel.s, `${channelName}.speed`);
+  if (!Number.isInteger(channel.m) || channel.m < 0) {
+    throw new RangeError(`${channelName}.mode must be a non-negative integer.`);
+  }
+  return { ...channel };
 }

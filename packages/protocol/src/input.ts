@@ -14,9 +14,9 @@
 // running clockwise from 0 = right (0.25 = down, 0.5 = left, 0.75 = up);
 // distance is 0 (center) to 1 (full deflection).
 
-import { RpcMethod, type RpcMessage } from "./rpc";
-import { isJsonObject } from "./json";
-import type { AgentKeyIndex } from "./lighting";
+import { RpcMethod, type RpcMessage } from "./rpc.js";
+import { isJsonObject } from "./json.js";
+import type { AgentKeyIndex } from "./lighting.js";
 
 export const KeyActionCode = Object.freeze({
   release: 0,
@@ -103,9 +103,14 @@ export function parseKeyEvent(eventParams: unknown): ParsedKeyEvent | null {
  */
 export function parseJoystickSample(eventParams: unknown): JoystickSample | null {
   if (!isJsonObject(eventParams)) return null;
-  const angle = Number(eventParams.a);
-  const distance = Number(eventParams.d);
+  const angle = eventParams.a;
+  const distance = eventParams.d;
+  // Strict typing, not coercion: Number(null) and Number("") are 0, which
+  // would forge a *centered* sample and silently re-arm the flick detector.
+  if (typeof angle !== "number" || typeof distance !== "number") return null;
   if (!Number.isFinite(angle) || !Number.isFinite(distance)) return null;
+  // The device reports deflection as 0 (center) to 1 (full).
+  if (distance < 0 || distance > 1) return null;
   return { angle, distance };
 }
 

@@ -7,7 +7,7 @@ import {
   decodeHidPacket,
   encodeHidPackets,
   rpcPayloadFromPacket,
-} from "../src/index";
+} from "../src/index.js";
 
 describe("encodeHidPackets", () => {
   test("frames a short message into one 64-byte packet", () => {

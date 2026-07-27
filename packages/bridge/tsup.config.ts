@@ -14,6 +14,11 @@ export default defineConfig({
   },
   format: ["esm"],
   target: "node20",
-  sourcemap: true,
+  // dist/ is committed and executed straight from a plugin checkout that has
+  // no node_modules, so the workspace codec must be bundled in. node-hid stays
+  // external: it is a native module, and only the daemon needs it (the Claude
+  // hooks run dist/event.js, which imports nothing outside node: builtins).
+  noExternal: ["codex-micro-protocol"],
+  sourcemap: false,
   clean: true,
 });

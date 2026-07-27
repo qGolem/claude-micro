@@ -4,7 +4,7 @@ import {
   VENDOR_USAGE_PAGE,
   WORK_LOUDER_VENDOR_ID,
   isCodexMicroInterface,
-} from "../src/index";
+} from "../src/index.js";
 
 describe("isCodexMicroInterface", () => {
   const matching = {

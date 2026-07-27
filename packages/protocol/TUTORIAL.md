@@ -31,7 +31,27 @@ const device = await HIDAsync.open(descriptor.path, { nonExclusive: true });
 ```
 
 In a browser, filter `navigator.hid.requestDevice` with the same constants
-(`WORK_LOUDER_VENDOR_ID`, `CODEX_MICRO_PRODUCT_ID`, `VENDOR_USAGE_PAGE`).
+(`WORK_LOUDER_VENDOR_ID`, `CODEX_MICRO_PRODUCT_ID`, `VENDOR_USAGE_PAGE`) — and
+mind one difference: this codec frames packets the way node-hid delivers them,
+with the report ID at byte 0, but WebHID strips that byte on input and takes it
+as a separate argument on output. Adapt at the transport boundary:
+
+```ts
+// receiving — put the report ID back before handing bytes to the codec
+device.addEventListener("inputreport", (event) => {
+  const packet = new Uint8Array(1 + event.data.byteLength);
+  packet[0] = event.reportId;
+  packet.set(new Uint8Array(event.data.buffer), 1);
+  for (const message of stream.pushHidPacket(packet)) { /* … */ }
+});
+
+// sending — strip it back off, and pass it as the first argument
+await device.sendReport(HID_REPORT_ID, packet.subarray(1));
+```
+
+Skip this and nothing breaks loudly — the receive path just silently yields no
+messages, because the codec reads the channel byte as a report ID and rejects
+the packet.
 
 ## Step 1 — light a key
 
@@ -106,8 +126,12 @@ the one abstraction we found essential, as configurable state:
 ```ts
 import { JoystickFlickDetector } from "codex-micro-protocol";
 
-const flicks = new JoystickFlickDetector();       // 0.8 trigger / 0.2 re-arm
-const direction = flicks.update(deviceEvent);      // "up" | "down" | ... | null
+const flicks = new JoystickFlickDetector();  // 0.8 trigger / 0.2 re-arm
+// inside the event loop:
+if (deviceEvent?.kind === "joystickSample") {
+  const direction = flicks.update(deviceEvent);
+  // "up" | "down" | "left" | "right" | null
+}
 ```
 
 ## Step 3 — request/response round-trips

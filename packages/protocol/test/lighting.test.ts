@@ -10,7 +10,7 @@ import {
   lightingConfigRequest,
   encodeRequestPackets,
   type AgentKeyIndex,
-} from "../src/index";
+} from "../src/index.js";
 
 describe("encodeAgentKeyLighting", () => {
   test("maps descriptive fields onto the abbreviated wire shape", () => {
@@ -63,11 +63,15 @@ describe("agentKeyStatusParams", () => {
     expect(agentKeyStatusParams([idleEntry(3)])).toHaveLength(1);
   });
 
-  test("returns a copy so later mutation of the input cannot bypass validation", () => {
-    const entries = [idleEntry(0)];
-    const validated = agentKeyStatusParams(entries);
-    expect(validated).not.toBe(entries);
-    expect(validated).toEqual(entries);
+  test("copies entries, not just the array, so later mutation cannot bypass validation", () => {
+    const entry = idleEntry(0);
+    const validated = agentKeyStatusParams([entry]);
+    expect(validated).not.toBe(entry);
+    // A caller reusing the entry object (e.g. across animation frames) must
+    // not be able to push post-validation values onto the wire.
+    entry.id = 99;
+    entry.b = 42;
+    expect(validated[0]).toMatchObject({ id: 0, b: 0.35 });
   });
 
   test("rejects empty, oversized, and duplicate-key updates", () => {
@@ -87,6 +91,16 @@ describe("whole-board lighting config", () => {
     expect(() => lightingConfigParams({})).toThrow(TypeError);
     const channel = encodeLightingChannel({ color: 0, brightness: 0, effect: 0, speed: 0 });
     expect(lightingConfigParams({ ambient: channel })).toEqual({ ambient: channel });
+  });
+
+  test("re-validates hand-built channels instead of trusting the wire type", () => {
+    // LightingChannelWire fields are plain numbers, so only this check stops
+    // out-of-range values reaching the firmware.
+    expect(() => lightingConfigParams({ keys: { c: -1, b: 1, e: 1, s: 0, m: 0 } })).toThrow(RangeError);
+    expect(() => lightingConfigParams({ keys: { c: 0, b: 99, e: 1, s: 0, m: 0 } })).toThrow(RangeError);
+    expect(() => lightingConfigParams({ ambient: { c: 0, b: 1, e: 42, s: 0, m: 0 } })).toThrow(RangeError);
+    expect(() => lightingConfigParams({ ambient: { c: 0, b: 1, e: 1, s: -3, m: 0 } })).toThrow(RangeError);
+    expect(() => lightingConfigParams({ keys: { c: 0, b: 1, e: 1, s: 0, m: -7 } })).toThrow(RangeError);
   });
 });
 

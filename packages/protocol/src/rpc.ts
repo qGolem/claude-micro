@@ -10,8 +10,8 @@
 //
 // Note the asymmetry: the host sends full key names, the device abbreviates.
 
-import { rpcPayloadFromPacket } from "./framing";
-import { isJsonObject } from "./json";
+import { rpcPayloadFromPacket } from "./framing.js";
+import { isJsonObject } from "./json.js";
 
 /** Every RPC method name the Codex Micro firmware is known to speak. */
 export const RpcMethod = Object.freeze({
@@ -127,8 +127,11 @@ export function parseRpcMessage(messageText: string): RpcMessage {
  * The device stream is untrusted input: a peer that never sends a newline
  * must not grow host memory without bound. Real messages are well under 1 KB;
  * anything past this cap is surfaced as one invalid message and dropped.
+ *
+ * Measured in UTF-16 code units (JavaScript string length), not bytes — a
+ * non-ASCII stream can therefore hold up to ~4 bytes per unit.
  */
-export const MAX_PENDING_MESSAGE_BYTES = 65_536;
+export const MAX_PENDING_MESSAGE_LENGTH = 65_536;
 
 /**
  * Incremental decoder for the device → host stream. Feed it raw HID reports
@@ -159,7 +162,7 @@ export class RpcMessageStream {
     const lines = this.#pendingText.split(/\r?\n/);
     this.#pendingText = lines.pop() ?? "";
     const messages = lines.filter((line) => line.length > 0).map(parseRpcMessage);
-    if (this.#pendingText.length > MAX_PENDING_MESSAGE_BYTES) {
+    if (this.#pendingText.length > MAX_PENDING_MESSAGE_LENGTH) {
       messages.push({ type: "invalid", text: this.#pendingText.slice(0, 1_024) });
       this.#pendingText = "";
     }

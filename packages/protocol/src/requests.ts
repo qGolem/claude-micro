@@ -1,13 +1,13 @@
 // High-level request builders: one call from intent to HID packets.
 
-import { encodeHidPackets } from "./framing";
-import { encodeRpcRequest, RpcMethod, type RpcRequest } from "./rpc";
+import { encodeHidPackets } from "./framing.js";
+import { encodeRpcRequest, RpcMethod, type RpcRequest } from "./rpc.js";
 import {
   agentKeyStatusParams,
   lightingConfigParams,
   type AgentKeyLightingWire,
   type LightingConfigWire,
-} from "./lighting";
+} from "./lighting.js";
 
 /** {method, params, id} for a firmware-version query. */
 export function firmwareVersionRequest({ id }: { id: number }): RpcRequest {

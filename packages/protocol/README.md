@@ -28,7 +28,7 @@ npm install codex-micro-protocol     # or: pnpm add / bun add / yarn add
 Vendoring without the registry, from a checkout of this repository:
 
 ```sh
-# as a tarball — dist + src + types, ~25 kB
+# as a tarball — dist + src + types, ~42 kB
 cd packages/protocol && pnpm run build && npm pack
 npm install /path/to/codex-micro-protocol-<version>.tgz
 
@@ -37,8 +37,9 @@ npm install /path/to/codex-micro-protocol-<version>.tgz
 ```
 
 The package ships prebuilt ESM (`import`), CJS (`require`), and `.d.ts`
-declarations; `src/` is included so you can also vendor the six source files
-directly into your tree (MIT licensed).
+declarations; `src/` is included so you can also vendor the source files
+directly into your tree (MIT licensed) — copy all of `src/`, since the modules
+share internal helpers.
 
 New here? Read the **[tutorial](./TUTORIAL.md)** — it builds a working
 integration step by step and shows how the production bridge in this
@@ -53,6 +54,13 @@ interface: vendor `0x303a`, product `0x8360`, usage page `0xff00`
 **Framing** — every report is 64 bytes: `[reportId 6, channel 2,
 payloadLength, …payload (≤61 bytes)]`. Longer messages span consecutive
 packets; concatenate payloads to reassemble.
+
+> **WebHID users:** these helpers use the node-hid byte layout, where the
+> report ID is byte 0. WebHID strips it on input and takes it as a separate
+> argument on output, so adapt at the boundary — prepend `event.reportId`
+> before `pushHidPacket`, and send with
+> `device.sendReport(HID_REPORT_ID, packet.subarray(1))`. Without this the
+> receive path silently yields nothing.
 
 **RPC envelope** — newline-terminated JSON, one message per line:
 
@@ -144,6 +152,8 @@ const direction = flickDetector.update(deviceEvent); // "up" | "down" | "left" |
 | `lighting.ts` | `LightingEffect`, agent-key and whole-board payload builders (validated), wire types |
 | `input.ts` | key-name tables, `parseKeyEvent`, joystick parsing, `JoystickFlickDetector`, the `DeviceEvent` union |
 | `requests.ts` | request builders + `encodeRequestPackets` |
+| `json.ts` | shared `isJsonObject` guard used by `rpc.ts` and `input.ts` |
+| `index.ts` | the public barrel — everything above is re-exported here |
 
 Unknown methods parse as `{kind: "unrecognized"}` rather than throwing, so
 firmware additions never break a consumer.

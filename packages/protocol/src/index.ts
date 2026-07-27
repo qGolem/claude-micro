@@ -4,7 +4,7 @@ export {
   VENDOR_USAGE_PAGE,
   isCodexMicroInterface,
   type HidInterfaceDescriptor,
-} from "./device";
+} from "./device.js";
 
 export {
   HID_REPORT_ID,
@@ -16,7 +16,7 @@ export {
   decodeHidPacket,
   rpcPayloadFromPacket,
   type DecodedHidPacket,
-} from "./framing";
+} from "./framing.js";
 
 export {
   RpcMethod,
@@ -24,7 +24,7 @@ export {
   encodeRpcRequest,
   parseRpcMessage,
   RpcMessageStream,
-  MAX_PENDING_MESSAGE_BYTES,
+  MAX_PENDING_MESSAGE_LENGTH,
   type RpcMethodName,
   type RpcMethodInput,
   type RpcRequest,
@@ -33,7 +33,7 @@ export {
   type RpcResponseMessage,
   type RpcUnknownMessage,
   type RpcInvalidMessage,
-} from "./rpc";
+} from "./rpc.js";
 
 export {
   LightingEffect,
@@ -51,7 +51,7 @@ export {
   type LightingChannelOptions,
   type LightingChannelWire,
   type LightingConfigWire,
-} from "./lighting";
+} from "./lighting.js";
 
 export {
   KeyActionCode,
@@ -76,11 +76,11 @@ export {
   type JoystickDirection,
   type JoystickFlickDetectorOptions,
   type DeviceEvent,
-} from "./input";
+} from "./input.js";
 
 export {
   firmwareVersionRequest,
   agentKeyStatusRequest,
   lightingConfigRequest,
   encodeRequestPackets,
-} from "./requests";
+} from "./requests.js";

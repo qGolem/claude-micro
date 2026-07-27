@@ -25,6 +25,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run verify
+      - name: Committed bridge build is current
+        run: git diff --exit-code -- packages/bridge/dist
       - name: Validate npm packaging (exports map, types, tarball)
         working-directory: packages/protocol
         run: |

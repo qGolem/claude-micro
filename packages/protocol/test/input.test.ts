@@ -11,7 +11,7 @@ import {
   parseJoystickSample,
   parseKeyEvent,
   parseRpcMessage,
-} from "../src/index";
+} from "../src/index.js";
 
 describe("key name tables", () => {
   test("cover all six agent keys and seven action keys", () => {
@@ -57,6 +57,29 @@ describe("joystick", () => {
     expect(parseJoystickSample({ a: 0.25, d: 0.9 })).toEqual({ angle: 0.25, distance: 0.9 });
     expect(parseJoystickSample({ a: "spin", d: 1 })).toBeNull();
     expect(parseJoystickSample({})).toBeNull();
+  });
+
+  test("parseJoystickSample rejects coercible non-numbers instead of forging a centered sample", () => {
+    // Number(null) / Number("") / Number([]) are all 0 — coercion here would
+    // manufacture a distance-0 sample and silently re-arm the flick detector.
+    for (const params of [{ a: null, d: null }, { a: "", d: "" }, { a: true, d: [] }, { a: "0.5", d: "0.9" }]) {
+      expect(parseJoystickSample(params)).toBeNull();
+    }
+  });
+
+  test("parseJoystickSample rejects out-of-range deflection", () => {
+    expect(parseJoystickSample({ a: 0.25, d: 500 })).toBeNull();
+    expect(parseJoystickSample({ a: 0.25, d: -0.1 })).toBeNull();
+    expect(parseJoystickSample({ a: 7, d: 1 })).toEqual({ angle: 7, distance: 1 });
+  });
+
+  test("a malformed sample cannot un-latch a held deflection", () => {
+    const detector = new JoystickFlickDetector();
+    expect(detector.update({ angle: 0, distance: 0.95 })).toBe("right");
+    expect(detector.update({ angle: 0, distance: 0.95 })).toBeNull();
+    // Previously {a:null,d:null} parsed as a centered sample and re-armed here.
+    expect(detector.update(parseJoystickSample({ a: null, d: null }))).toBeNull();
+    expect(detector.update({ angle: 0, distance: 0.95 })).toBeNull();
   });
 
   test("joystickDirection rejects non-finite angles", () => {

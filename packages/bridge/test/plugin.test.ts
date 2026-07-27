@@ -71,8 +71,56 @@ test("tmux entrypoint lives at the repository root and is executable", () => {
   assert.ok(fs.statSync(entrypoint).mode & 0o111);
 });
 
-test("the built event forwarder exists where the hooks point", () => {
-  assert.ok(fs.existsSync(path.join(root, "dist", "event.js")), "run pnpm run build first");
+// Claude Code installs this plugin by cloning the repo and runs the hooks with
+// no build or install step, so asserting the file merely EXISTS is meaningless
+// here — `pnpm test` builds it first. What matters is that it is committed.
+test("every hook target is committed, not just built locally", () => {
+  const hookTargets = new Set<string>();
+  for (const groups of Object.values(hooksConfig.hooks)) {
+    for (const group of groups) {
+      for (const hook of group.hooks) {
+        const match = /\$\{CLAUDE_PLUGIN_ROOT\}\/(\S+?\.js)/.exec(hook.command ?? "");
+        if (match) hookTargets.add(match[1]!);
+      }
+    }
+  }
+  assert.ok(hookTargets.size > 0, "hooks.json references at least one built file");
+
+  for (const target of hookTargets) {
+    assert.ok(fs.existsSync(path.join(repoRoot, target)), `${target} exists (run pnpm run build)`);
+    const tracked = execFileSync("git", ["ls-files", "--error-unmatch", target], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    assert.equal(tracked, target, `${target} is committed — a cloned plugin has no build step`);
+  }
+});
+
+test("the committed bridge build is not stale", () => {
+  // A stale dist/ ships old behavior to every plugin user, and nothing else in
+  // the suite would notice: the tests import from src/.
+  execFileSync("pnpm", ["run", "build"], { cwd: root, stdio: "pipe" });
+  const status = execFileSync("git", ["status", "--porcelain", "--", "packages/bridge/dist"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  // Column 2 is the worktree state: a rebuild that changed nothing leaves it
+  // clean. Staged-but-uncommitted adds ("A ") are fine; modified ("?M"/" M")
+  // or untracked ("??") output means the committed build is stale.
+  const drifted = status
+    .split("\n")
+    .filter((line) => line.length > 2 && (line.startsWith("??") || line[1] !== " "));
+  assert.deepEqual(drifted, [], `rebuild changed the build output — run pnpm run build and commit:\n${drifted.join("\n")}`);
+});
+
+test("the event forwarder runs with no node_modules present", () => {
+  // The plugin cache has no install step, so dist/event.js must not import
+  // anything outside node: builtins.
+  const built = fs.readFileSync(path.join(root, "dist", "event.js"), "utf8");
+  const imports = [...built.matchAll(/from\s*"([^"]+)"/g)].map((match) => match[1]!);
+  const external = imports.filter((specifier) => !specifier.startsWith("node:") && !/^(fs|net|path|os|child_process|url|timers)$/.test(specifier));
+  assert.deepEqual(external, [], "event.js must bundle everything except node builtins");
 });
 
 test("cleanup-legacy removes the 0.1.x tmux block and settings hooks, preserving the rest", (context) => {

@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
-  MAX_PENDING_MESSAGE_BYTES,
+  MAX_PENDING_MESSAGE_LENGTH,
   RequestIdSequence,
   RpcMessageStream,
   RpcMethod,
   encodeHidPackets,
   encodeRpcRequest,
   parseRpcMessage,
-} from "../src/index";
+} from "../src/index.js";
 
 describe("encodeRpcRequest", () => {
   test("emits newline-terminated JSON with method, params, id", () => {
@@ -107,7 +107,7 @@ describe("RpcMessageStream", () => {
 
   test("caps an endless line instead of growing without bound", () => {
     const stream = new RpcMessageStream();
-    const flood = "x".repeat(MAX_PENDING_MESSAGE_BYTES + 1);
+    const flood = "x".repeat(MAX_PENDING_MESSAGE_LENGTH + 1);
     const messages = stream.pushText(flood);
     expect(messages).toMatchObject([{ type: "invalid" }]);
     expect(stream.pendingText).toBe("");

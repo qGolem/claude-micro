@@ -24,6 +24,15 @@ const debugDir = process.env.CLAUDE_MICRO_DEBUG_DIR;
 const latencyLogPath = process.env.CLAUDE_MICRO_LATENCY_LOG;
 const maxHookBytes = Number(process.env.CLAUDE_MICRO_MAX_HOOK_BYTES ?? 262_144);
 const agentHoldMs = Number(process.env.CLAUDE_MICRO_AGENT_HOLD_MS ?? 3_000);
+// A device call that never settles must not disable lighting for the life of
+// the process; every HID await is raced against this.
+const deviceTimeoutMs = Number(process.env.CLAUDE_MICRO_DEVICE_TIMEOUT_MS ?? 2_000);
+// Opt-in tracing appends a line per HID report (~2 GB/day at the 75 ms refresh
+// rate), so each trace file stops growing at this size.
+const maxDebugFileBytes = Number(process.env.CLAUDE_MICRO_MAX_DEBUG_BYTES ?? 64 * 1024 * 1024);
+// A session that dies without its SessionEnd hook would otherwise hold its key
+// forever; assignments older than this are evictable when all six are taken.
+const slotStaleMs = Number(process.env.CLAUDE_MICRO_SLOT_STALE_MS ?? 12 * 60 * 60 * 1_000);
 
 function removeSocket(): void {
   try {
@@ -35,10 +44,109 @@ function removeSocket(): void {
   }
 }
 
+/**
+ * Answers whether a bridge is already listening on the socket. Unlinking it
+ * blind would orphan that daemon's listener: it keeps running and driving the
+ * LEDs, but becomes unreachable and untrackable (the pid file names only one).
+ */
+function probeRunningBridge(): Promise<{ pid?: number } | null> {
+  if (!fs.existsSync(socketPath)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const client = net.createConnection(socketPath);
+    let response = "";
+    const finish = (result: { pid?: number } | null) => {
+      clearTimeout(timer);
+      client.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(null), 750);
+    client.once("connect", () => client.end(JSON.stringify({ op: "claude-micro.health" })));
+    client.setEncoding("utf8");
+    client.on("data", (chunk: string) => (response += chunk));
+    client.once("end", () => {
+      try {
+        const parsed = JSON.parse(response) as { ok?: boolean; pid?: number };
+        finish(parsed?.ok === true ? parsed : null);
+      } catch {
+        finish(null);
+      }
+    });
+    client.once("error", () => finish(null));
+  });
+}
+
+const runningBridge = await probeRunningBridge();
+if (runningBridge && process.env.CLAUDE_MICRO_REPLACE !== "1") {
+  console.error(
+    `Claude Micro: a bridge is already running (pid ${runningBridge.pid ?? "unknown"}) on ${socketPath}.\n` +
+      "Stop it first (Prefix + k restarts the tmux-managed bridge), or set CLAUDE_MICRO_REPLACE=1 to take over.",
+  );
+  process.exit(1);
+}
+
+const debugFileBytes = new Map<string, number>();
 function debugLog(name: string, value: string): void {
   if (!debugDir) return;
   fs.mkdirSync(debugDir, { recursive: true, mode: 0o700 });
-  fs.appendFileSync(path.join(debugDir, name), value, { mode: 0o600 });
+  const target = path.join(debugDir, name);
+  let written = debugFileBytes.get(name);
+  if (written === undefined) {
+    try {
+      written = fs.statSync(target).size;
+    } catch {
+      written = 0;
+    }
+  }
+  if (written >= maxDebugFileBytes) return;
+  fs.appendFileSync(target, value, { mode: 0o600 });
+  const total = written + Buffer.byteLength(value);
+  debugFileBytes.set(name, total);
+  if (total >= maxDebugFileBytes) {
+    console.error(`Claude Micro: ${name} reached ${maxDebugFileBytes} bytes; tracing to it has stopped.`);
+  }
+}
+
+/**
+ * Atomic write that cannot be redirected by a pre-planted symlink: the temp
+ * file is created with O_EXCL (wx) at mode 0600, then renamed over the target.
+ */
+function writeFileAtomically(targetPath: string, contents: string): void {
+  const temporaryPath = `${targetPath}.${process.pid}.tmp`;
+  let handle: number | undefined;
+  try {
+    handle = fs.openSync(temporaryPath, "wx", 0o600);
+    fs.writeFileSync(handle, contents);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      // Either a crashed run left it behind or someone planted it. Remove and
+      // retry once; a planted symlink is unlinked, never followed.
+      fs.rmSync(temporaryPath, { force: true });
+      handle = fs.openSync(temporaryPath, "wx", 0o600);
+      fs.writeFileSync(handle, contents);
+    } else {
+      throw error;
+    }
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle);
+  }
+  fs.renameSync(temporaryPath, targetPath);
+}
+
+/** Races a device call so a hung HID handle cannot wedge the refresh loop. */
+function withDeviceTimeout<T>(operation: Promise<T>, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} did not settle within ${deviceTimeoutMs}ms`)), deviceTimeoutMs);
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function latencyLog(entry: Record<string, unknown>): void {
@@ -55,9 +163,7 @@ function writeHealth(state: string, force = false): void {
   if (!force && state === healthState && now - healthWrittenAt < 1_000) return;
   healthState = state;
   healthWrittenAt = now;
-  const temporaryPath = `${healthPath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporaryPath, `${JSON.stringify({ state, updatedAt: new Date(now).toISOString(), pid: process.pid })}\n`);
-  fs.renameSync(temporaryPath, healthPath);
+  writeFileAtomically(healthPath, `${JSON.stringify({ state, updatedAt: new Date(now).toISOString(), pid: process.pid })}\n`);
 }
 
 function restoredSlotState(): Array<Record<string, unknown>> {
@@ -70,7 +176,10 @@ function restoredSlotState(): Array<Record<string, unknown>> {
 }
 
 const storedSlots = restoredSlotState();
-const slots = new SessionSlots(storedSlots.map((record) => ({ sessionId: record.sessionId, slot: record.id })));
+const slots = new SessionSlots(
+  storedSlots.map((record) => ({ sessionId: record.sessionId, slot: record.id, lastSeenAt: record.updatedAt })),
+  { staleAfterMs: slotStaleMs },
+);
 const agentStates: string[] = Array(AGENT_KEY_COUNT).fill("idle");
 const agentPanes: Array<string | null> = Array(AGENT_KEY_COUNT).fill(null);
 for (const record of storedSlots) {
@@ -100,13 +209,14 @@ async function reconnectMicro(): Promise<void> {
   reconnecting = true;
   try {
     try {
-      await micro.close();
+      await withDeviceTimeout(micro.close(), "device close");
     } catch {
-      // The old handle may already be invalid after a USB/HID reset.
+      // The old handle may already be invalid, or hung, after a USB/HID reset.
     }
     for (let attempt = 0; attempt < 10; attempt += 1) {
       try {
-        micro = await CodexMicro.connect();
+        micro = await withDeviceTimeout(CodexMicro.connect(), "device connect");
+        messageStream.reset();
         attachInput(micro);
         writeHealth("connected", true);
         console.log("Claude Micro reconnected.");
@@ -134,7 +244,7 @@ async function refreshAgentKeys(): Promise<void> {
     // ChatGPT Codex can also publish an idle state. Refreshing only the
     // per-thread channel lets Claude own the Agent LEDs without changing the
     // Input layer or the frame/background RGB configuration.
-    await micro.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot());
+    await withDeviceTimeout(micro.sendRequest(RpcMethod.agentKeyStatus, agentKeyLightingSnapshot()), "agent-key refresh");
     writeHealth("connected");
   } catch (error) {
     console.error(`Claude Micro refresh failed: ${(error as Error).message}`);
@@ -147,10 +257,16 @@ async function refreshAgentKeys(): Promise<void> {
 
 function writeSlots(): void {
   const sessionIds = new Map(slots.entries().map(({ sessionId, slot }) => [slot, sessionId]));
-  const payload = { slots: agentStates.map((state, id) => ({ id, state, tmuxPane: agentPanes[id], sessionId: sessionIds.get(id) ?? null })) };
-  const temporaryPath = `${slotsPath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporaryPath, `${JSON.stringify(payload)}\n`, "utf8");
-  fs.renameSync(temporaryPath, slotsPath);
+  const payload = {
+    slots: agentStates.map((state, id) => ({
+      id,
+      state,
+      tmuxPane: agentPanes[id],
+      sessionId: sessionIds.get(id) ?? null,
+      updatedAt: slots.lastSeenAt(id) ?? null,
+    })),
+  };
+  writeFileAtomically(slotsPath, `${JSON.stringify(payload)}\n`);
 }
 
 await refreshAgentKeys();
@@ -292,7 +408,10 @@ $.CGEventPost($.kCGHIDEventTap, up);`;
   await run("osascript", ["-l", "JavaScript", "-e", script]);
 }
 
-const commandKeyActions: Record<string, () => unknown> = {
+// Prototype-free: the key name comes from the device, and a plain object
+// literal would resolve "__proto__"/"constructor" to inherited members —
+// truthy but not callable, which crashes the input listener.
+const commandKeyActions: Record<string, () => unknown> = Object.assign(Object.create(null), {
   ACT06: () => sendToActivePane("C-s"),
   ACT07: () => sendToActivePane("C-w"),
   ACT08: () => sendSequenceToActivePane(["d", "a", "w"]),
@@ -300,14 +419,20 @@ const commandKeyActions: Record<string, () => unknown> = {
   ACT10: () => sendToActivePane("Escape"),
   ACT11: invokeWhisperflow,
   ACT12: () => sendToActivePane("C-c"),
-};
+});
 
 // On this unit, the physical left turn reports ENC_CW and the right turn
 // ENC_CC; the bindings below give left turn → Left arrow.
-const encoderActions: Record<string, () => unknown> = {
+const encoderActions: Record<string, () => unknown> = Object.assign(Object.create(null), {
   [ENCODER_KEY_NAMES.clockwise]: () => sendToActivePane("Left"),
   [ENCODER_KEY_NAMES.counterClockwise]: () => sendToActivePane("Right"),
-};
+});
+
+/** Looks up a device-supplied key name safely: own, callable entries only. */
+function keyAction(table: Record<string, () => unknown>, keyName: string): (() => unknown) | null {
+  const action = Object.hasOwn(table, keyName) ? table[keyName] : undefined;
+  return typeof action === "function" ? action : null;
+}
 
 const tmuxKeyByJoystickDirection: Record<JoystickDirection, string> = {
   right: "Right",
@@ -331,8 +456,8 @@ function handleDeviceMessage(message: RpcMessage): void {
     if (action === "press" && message.type === "event") debugLog("hid-keys.log", `${JSON.stringify(message.raw)}\n`);
     if (agentKeyIndex !== null && action === "press") beginAgentKeyPress(agentKeyIndex);
     if (agentKeyIndex !== null && action === "release") cancelAgentKeyHold(agentKeyIndex);
-    if (action === "press" && commandKeyActions[keyName]) void commandKeyActions[keyName]();
-    if (action === "encoderTurn" && encoderActions[keyName]) void encoderActions[keyName]();
+    if (action === "press") void keyAction(commandKeyActions, keyName)?.();
+    if (action === "encoderTurn") void keyAction(encoderActions, keyName)?.();
     return;
   }
   const direction = joystickFlickDetector.update(deviceEvent);
@@ -351,7 +476,16 @@ function attachInput(handle: CodexMicro): void {
         debugLog("hid-raw.log", `${Date.now()} ${Buffer.from(reportBytes).toString("hex")}\n`);
       }
     }
-    for (const message of messageStream.pushHidPacket(reportBytes)) handleDeviceMessage(message);
+    // One malformed report must never take the bridge down: an exception here
+    // would be unhandled inside node-hid's data listener and kill the process.
+    for (const message of messageStream.pushHidPacket(reportBytes)) {
+      try {
+        handleDeviceMessage(message);
+      } catch (error) {
+        console.error(`Claude Micro: ignoring unhandled device message — ${(error as Error).message}`);
+        debugLog("bridge.log", `${new Date().toISOString()} device message failed: ${(error as Error).stack}\n`);
+      }
+    }
   });
 }
 attachInput(micro);
@@ -365,15 +499,20 @@ const server = net.createServer({ allowHalfOpen: true }, (connection) => {
   // half-close from becoming an unhandled socket error in the bridge.
   connection.on("error", () => {});
   connection.on("data", (chunk: string) => {
+    if (oversized) return;
     body += chunk;
     if (body.length > maxHookBytes) {
       oversized = true;
-      connection.destroy();
+      // Answer before tearing down: destroying here suppresses the 'end'
+      // event, so a client that got no reply would misreport an over-limit
+      // payload as the bridge being unavailable.
+      body = "";
+      connection.end(JSON.stringify({ ok: false, error: "Hook payload exceeds the bridge limit." }));
     }
   });
   connection.on("end", async () => {
+    if (oversized) return;
     try {
-      if (oversized) throw new Error("Hook payload exceeds the bridge limit.");
       const event = JSON.parse(body) as Record<string, unknown>;
       if (event?.op === "claude-micro.health") {
         connection.end(JSON.stringify({ ok: true, state: healthState, pid: process.pid }));

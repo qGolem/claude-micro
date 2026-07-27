@@ -151,6 +151,12 @@ pnpm run verify   # build + typecheck + tests in every package
 pnpm start        # run the built bridge in the foreground
 ```
 
+`packages/bridge/dist/` is **committed on purpose**: Claude Code installs this
+plugin by cloning the repo and runs the hooks with no build or install step, so
+the built forwarder has to be in the checkout. Rebuild and commit it with any
+bridge source change — `pnpm run verify` fails if the committed output is
+stale, and the hooks' entry point is asserted to be tracked by git.
+
 Everything is TypeScript, built with tsup. The protocol codec's tests run
 under `bun test` (Bun required for development); the bridge's tests run under
 `node --test` through tsx. The tmux plugin and Claude hooks execute the plain
